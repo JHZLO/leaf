@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use gpui_kit::{component::Icon, prelude::FluentBuilder as _, *};
 use leaf_project::{
     fs::{self, EntryKind},
-    nav::{self, NavKey},
+    nav::{self, NavKey, SearchStep},
     tree::{ProjectTree, Row},
 };
 
 use crate::{
     keymap::{
-        Collapse, Expand, LeafThrough, Open, PROJECT_PANEL, PageDown, PageUp, SelectFirst,
-        SelectLast, SelectNext, SelectPrev,
+        Collapse, Expand, FocusEditor, LeafThrough, Open, PROJECT_PANEL, PageDown, PageUp,
+        SelectFirst, SelectLast, SelectNext, SelectPrev,
     },
     theme::{self, c, size, z},
 };
@@ -29,6 +29,10 @@ const CHEVRON_SIZE: f32 = 10.;
 const MIN_WIDTH: f32 = 180.;
 const MAX_WIDTH: f32 = 480.;
 const RESIZE_HANDLE: f32 = 4.;
+
+/// Speed search field spacing at 100% zoom.
+const SEARCH_MARGIN: f32 = 8.;
+const SEARCH_PADDING: f32 = 6.;
 
 /// Key hint line spacing at 100% zoom.
 const HINT_PADDING: f32 = 8.;
@@ -79,6 +83,10 @@ pub struct ProjectPanel {
     pub show_key_hints: bool,
     /// The tree width at 100% zoom, dragged from its right edge. The session keeps it.
     pub width: f32,
+    /// The speed search text while a search is on (IntelliJ: type in the tree to find a name).
+    search: Option<String>,
+    /// Ends the search when focus leaves the tree. Made on first use: `new` has no window.
+    focus_out: Option<Subscription>,
 }
 
 /// What the right edge drags; the panel resizes as it moves.
@@ -100,6 +108,8 @@ impl ProjectPanel {
             scroll: UniformListScrollHandle::new(),
             show_key_hints: true,
             width: size::TREE_WIDTH,
+            search: None,
+            focus_out: None,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -167,6 +177,8 @@ impl ProjectPanel {
     }
 
     fn apply(&mut self, key: NavKey, cx: &mut Context<Self>) {
+        // Every move but Up and Down ends a speed search.
+        self.search = None;
         let outcome = nav::navigate(&self.tree.rows(), self.tree.selected(), key);
         if let Some(dir) = outcome.expand
             && self.tree.expand(&dir)
@@ -181,6 +193,82 @@ impl ProjectPanel {
         }
         self.reveal_selection();
         cx.notify();
+    }
+
+    /// Up and Down walk the matches while a speed search is on, the rows otherwise.
+    fn up_down(&mut self, key: NavKey, cx: &mut Context<Self>) {
+        match (&self.search, key) {
+            (Some(_), NavKey::Up) => self.search_step(SearchStep::Prev, cx),
+            (Some(_), _) => self.search_step(SearchStep::Next, cx),
+            (None, _) => self.apply(key, cx),
+        }
+    }
+
+    /// Selects the match `step` points at; with no match the selection stays.
+    fn search_step(&mut self, step: SearchStep, cx: &mut Context<Self>) {
+        let Some(query) = &self.search else {
+            return;
+        };
+        if let Some(path) = nav::speed_search(&self.tree.rows(), self.tree.selected(), query, step)
+        {
+            self.tree.select(Some(path));
+            self.reveal_selection();
+        }
+        cx.notify();
+    }
+
+    /// Typing a name starts or extends a speed search; Backspace takes a character back.
+    /// Keys with a binding (arrows, Enter, Space, Escape) arrive as actions instead.
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        // Option types special characters on macOS; leave it, like Cmd and Ctrl, to shortcuts.
+        if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
+            return;
+        }
+        if keystroke.key == "backspace" {
+            let Some(query) = &mut self.search else {
+                return;
+            };
+            query.pop();
+            if query.is_empty() {
+                self.search = None;
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        let Some(text) = keystroke
+            .key_char
+            .as_deref()
+            .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+        else {
+            return;
+        };
+        self.watch_focus(window, cx);
+        self.search.get_or_insert_default().push_str(text);
+        self.search_step(SearchStep::Here, cx);
+        cx.stop_propagation();
+    }
+
+    /// Escape clears a speed search first; with none, it goes on to focus the editor.
+    fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.search.take().is_some() {
+            cx.notify();
+        } else {
+            cx.propagate();
+        }
+    }
+
+    fn watch_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_out.is_none() {
+            self.focus_out = Some(
+                cx.on_focus_out(&self.focus_handle, window, |this, _, _, cx| {
+                    this.search = None;
+                    cx.notify();
+                }),
+            );
+        }
     }
 
     /// Scrolls just enough to show the selected row.
@@ -248,7 +336,14 @@ impl ProjectPanel {
     }
 
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
-    fn render_row(row: &Row, selected: bool, focused: bool, cx: &App) -> Stateful<Div> {
+    /// The part of the name a speed search for `query` matched is set in medium weight.
+    fn render_row(
+        row: &Row,
+        selected: bool,
+        focused: bool,
+        query: Option<&str>,
+        cx: &App,
+    ) -> Stateful<Div> {
         let p = theme::colors(cx);
         let is_dir = row.kind == EntryKind::Dir;
         let (ink, chevron_color) = match (selected, focused) {
@@ -325,8 +420,47 @@ impl ProjectPanel {
                     )
                 }),
         )
-        .child(row.name.clone())
+        .child(name_label(&row.name, query))
     }
+}
+
+/// A row's name, its speed search match in medium weight.
+fn name_label(name: &str, query: Option<&str>) -> StyledText {
+    let text = StyledText::new(name.to_string());
+    match query.and_then(|query| nav::name_match(name, query)) {
+        Some(range) => text.with_highlights([(
+            range,
+            HighlightStyle {
+                font_weight: Some(FontWeight::MEDIUM),
+                ..Default::default()
+            },
+        )]),
+        None => text,
+    }
+}
+
+/// The line at the top of the list that shows what a speed search is looking for.
+fn search_field(query: String, cx: &App) -> impl IntoElement {
+    let p = theme::colors(cx);
+    div()
+        .flex_none()
+        .px(z(SEARCH_MARGIN, cx))
+        .pb(z(SEARCH_MARGIN, cx))
+        .child(
+            div()
+                .h(z(size::TREE_ROW, cx))
+                .flex()
+                .items_center()
+                .px(z(SEARCH_PADDING, cx))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .rounded(z(4., cx))
+                .border_1()
+                .border_color(c(p.line))
+                .bg(c(p.paper))
+                .text_color(c(p.ink))
+                .child(query),
+        )
 }
 
 impl Render for ProjectPanel {
@@ -356,11 +490,13 @@ impl Render for ProjectPanel {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.search = None;
                     this.focus_handle.focus(window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.apply(NavKey::Up, cx)))
-            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.apply(NavKey::Down, cx)))
+            .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.up_down(NavKey::Up, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.up_down(NavKey::Down, cx)))
             .on_action(cx.listener(|this, _: &Expand, _, cx| this.apply(NavKey::Right, cx)))
             .on_action(cx.listener(|this, _: &Collapse, _, cx| this.apply(NavKey::Left, cx)))
             .on_action(cx.listener(|this, _: &SelectFirst, _, cx| this.apply(NavKey::First, cx)))
@@ -373,7 +509,11 @@ impl Render for ProjectPanel {
                 let page = this.page_rows(cx);
                 this.apply(NavKey::PageDown(page), cx)
             }))
-            .on_action(cx.listener(|this, _: &Open, _, cx| this.open_selected(false, cx)))
+            .on_action(cx.listener(|this, _: &Open, _, cx| {
+                this.search = None;
+                this.open_selected(false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FocusEditor, _, cx| this.escape(cx)))
             .on_action(cx.listener(|this, _: &LeafThrough, _, cx| this.open_selected(true, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
@@ -420,10 +560,14 @@ impl Render for ProjectPanel {
                             .child(parent),
                     ),
             )
+            .when_some(self.search.clone(), |el, query| {
+                el.child(search_field(query, cx))
+            })
             .child(
                 uniform_list("project-tree", count, {
                     let rows = rows.clone();
                     let selected = selected.clone();
+                    let query = self.search.clone();
                     let panel = cx.weak_entity();
                     move |range, _, cx| {
                         rows[range]
@@ -435,6 +579,7 @@ impl Render for ProjectPanel {
                                     row,
                                     selected.as_deref() == Some(row.path.as_path()),
                                     focused,
+                                    query.as_deref(),
                                     cx,
                                 )
                                 .on_click(move |event, _, cx| {

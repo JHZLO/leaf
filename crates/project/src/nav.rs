@@ -1,6 +1,9 @@
 //! What each key does in the tree (IntelliJ semantics). Pure: rows and selection in, a move out.
 
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use crate::{fs::EntryKind, tree::Row};
 
@@ -67,6 +70,59 @@ pub fn navigate(rows: &[Row], selected: Option<&Path>, key: NavKey) -> NavOutcom
     };
     outcome.select = target.map(|i| rows[i].path.clone());
     outcome
+}
+
+/// Which way a speed search looks for the next name that matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchStep {
+    /// The text changed: the selected row if it still matches, else the next match below it,
+    /// else the first one from the top, so a match anywhere on screen is found.
+    Here,
+    /// Down: the next match below the selection. Like the arrow keys, it stops at the end.
+    Next,
+    /// Up: the previous match above the selection.
+    Prev,
+}
+
+/// Where `query` sits in `name`, as a byte range of `name`, ignoring case.
+/// An empty query matches nothing.
+pub fn name_match(name: &str, query: &str) -> Option<Range<usize>> {
+    let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if query.is_empty() {
+        return None;
+    }
+    // Lowercasing can turn one character into several; each keeps the bytes it came from,
+    // so the range always falls on whole characters of the name.
+    let folded: Vec<(char, Range<usize>)> = name
+        .char_indices()
+        .flat_map(|(at, c)| {
+            let bytes = at..at + c.len_utf8();
+            c.to_lowercase().map(move |lower| (lower, bytes.clone()))
+        })
+        .collect();
+    folded
+        .windows(query.len())
+        .find(|window| window.iter().map(|(c, _)| c).eq(query.iter()))
+        .map(|window| window[0].1.start..window[window.len() - 1].1.end)
+}
+
+/// The row a speed search for `query` selects, among the visible rows.
+pub fn speed_search(
+    rows: &[Row],
+    selected: Option<&Path>,
+    query: &str,
+    step: SearchStep,
+) -> Option<PathBuf> {
+    let matches = |row: &&Row| name_match(&row.name, query).is_some();
+    let current = selected.and_then(|s| rows.iter().position(|r| r.path == s));
+    let found = match (step, current) {
+        (SearchStep::Here, Some(i)) => rows[i..].iter().chain(&rows[..i]).find(matches),
+        (SearchStep::Here | SearchStep::Next, None) => rows.iter().find(matches),
+        (SearchStep::Next, Some(i)) => rows[i + 1..].iter().find(matches),
+        (SearchStep::Prev, Some(i)) => rows[..i].iter().rev().find(matches),
+        (SearchStep::Prev, None) => rows.iter().rev().find(matches),
+    };
+    found.map(|row| row.path.clone())
 }
 
 #[cfg(test)]
@@ -226,6 +282,86 @@ mod tests {
     fn home_and_end_go_to_the_first_and_last_rows() {
         assert_eq!(nav(Some("docs/a.md"), NavKey::First), select("docs"));
         assert_eq!(nav(Some("docs/a.md"), NavKey::Last), select("top.md"));
+    }
+
+    #[test]
+    fn names_match_ignoring_case() {
+        assert_eq!(name_match("README.md", "read"), Some(0..4));
+        assert_eq!(name_match("paths.md", "S.M"), Some(4..7));
+        assert_eq!(name_match("paths.md", "x"), None);
+        assert_eq!(name_match("paths.md", ""), None);
+        assert_eq!(name_match("a.md", "a.md.bak"), None);
+    }
+
+    #[test]
+    fn a_match_covers_whole_characters_of_the_name() {
+        // Hangul takes three bytes a character.
+        assert_eq!(name_match("한글.md", "글"), Some(3..6));
+        // `İ` lowercases to two characters; a match on either still spans all of `İ`.
+        assert_eq!(name_match("İx", "i"), Some(0..2));
+        assert_eq!(name_match("İx", "x"), Some(2..3));
+    }
+
+    fn search(selected: Option<&str>, query: &str, step: SearchStep) -> Option<PathBuf> {
+        speed_search(&rows(), selected.map(Path::new), query, step)
+    }
+
+    fn found(path: &str) -> Option<PathBuf> {
+        Some(path.into())
+    }
+
+    #[test]
+    fn typing_selects_the_first_match_from_the_selection_down() {
+        // The selected row still matches, so the selection stays.
+        assert_eq!(
+            search(Some("docs/guide"), "gui", SearchStep::Here),
+            found("docs/guide")
+        );
+        assert_eq!(
+            search(Some("docs/empty"), "d", SearchStep::Here),
+            found("docs/guide")
+        );
+        // Only names count: the path `docs/a.md` holds "docs", its name does not.
+        assert_eq!(
+            search(Some("docs/a.md"), "docs", SearchStep::Here),
+            found("docs")
+        );
+        assert_eq!(search(None, "md", SearchStep::Here), found("docs/a.md"));
+        assert_eq!(search(Some("docs"), "zzz", SearchStep::Here), None);
+    }
+
+    #[test]
+    fn typing_starts_again_from_the_top_past_the_last_match() {
+        assert_eq!(
+            search(Some("top.md"), "src", SearchStep::Here),
+            found("src")
+        );
+    }
+
+    #[test]
+    fn up_and_down_step_through_the_matches_and_stop_at_the_ends() {
+        // "d" matches docs, guide, a.md and top.md.
+        assert_eq!(
+            search(Some("docs"), "d", SearchStep::Next),
+            found("docs/guide")
+        );
+        assert_eq!(
+            search(Some("docs/guide"), "d", SearchStep::Next),
+            found("docs/a.md")
+        );
+        assert_eq!(
+            search(Some("docs/a.md"), "d", SearchStep::Next),
+            found("top.md")
+        );
+        assert_eq!(search(Some("top.md"), "d", SearchStep::Next), None);
+        assert_eq!(
+            search(Some("top.md"), "d", SearchStep::Prev),
+            found("docs/a.md")
+        );
+        assert_eq!(search(Some("docs"), "d", SearchStep::Prev), None);
+        // With nothing selected they start at the matching end.
+        assert_eq!(search(None, "d", SearchStep::Next), found("docs"));
+        assert_eq!(search(None, "d", SearchStep::Prev), found("top.md"));
     }
 
     #[test]
