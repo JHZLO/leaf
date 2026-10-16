@@ -109,6 +109,28 @@ impl ProjectPanel {
         self.tree.root()
     }
 
+    /// Reopens the folders and the selection a session saved; folders that no longer exist stay closed.
+    pub fn restore(
+        &mut self,
+        expanded: &[PathBuf],
+        selected: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        for dir in expanded {
+            if self.tree.expand(dir) {
+                self.load_dir(dir.clone(), cx);
+            }
+        }
+        self.tree.select(selected);
+        cx.notify();
+    }
+
+    pub fn expanded_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = self.tree.expanded_dirs().map(Path::to_path_buf).collect();
+        dirs.sort();
+        dirs
+    }
+
     pub fn selected(&self) -> Option<&Path> {
         self.tree.selected()
     }

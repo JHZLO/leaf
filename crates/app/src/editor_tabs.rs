@@ -9,10 +9,13 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _,
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
-    input::{Editor, EditorState, InputEvent, RopeExt as _},
+    input::{Editor, EditorState, InputEvent, Position, RopeExt as _},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile};
+use leaf_project::{
+    fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile},
+    session::TabState,
+};
 
 use crate::{
     preview::Preview,
@@ -55,6 +58,8 @@ struct PendingOpen {
     id: u64,
     path: PathBuf,
     leaf_through: bool,
+    /// Where to put the cursor once open (zero-based line and column), for a restored session.
+    cursor: Option<(u32, u32)>,
 }
 
 pub struct EditorTabs {
@@ -63,6 +68,8 @@ pub struct EditorTabs {
     active: Option<usize>,
     pending: Vec<PendingOpen>,
     next_open: u64,
+    /// While a session's tabs load, only this one takes the active place, so the order reads finish in does not matter.
+    restoring_active: Option<PathBuf>,
     preview: Option<Entity<Preview>>,
     focus_handle: FocusHandle,
     /// The last file that could not be opened, and why; shown in the status bar.
@@ -123,6 +130,7 @@ impl EditorTabs {
             active: None,
             pending: Vec::new(),
             next_open: 0,
+            restoring_active: None,
             preview: None,
             focus_handle: cx.focus_handle(),
             error: None,
@@ -186,6 +194,7 @@ impl EditorTabs {
             id,
             path: path.to_path_buf(),
             leaf_through,
+            cursor: None,
         });
         let abs = self.root.join(path);
         let read = cx
@@ -212,7 +221,10 @@ impl EditorTabs {
             return;
         };
         let PendingOpen {
-            path, leaf_through, ..
+            path,
+            leaf_through,
+            cursor,
+            ..
         } = self.pending.remove(ix);
         let file = match file {
             Ok(file) => file,
@@ -225,6 +237,11 @@ impl EditorTabs {
         };
         self.error = None;
         let tab = self.new_tab(path, leaf_through, file, window, cx);
+        if let Some((line, column)) = cursor {
+            tab.editor.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(line, column), window, cx)
+            });
+        }
         // A new leaf-through replaces the previous one in place.
         let index = match self.tabs.iter().position(|t| t.leaf_through) {
             Some(i) if leaf_through => {
@@ -236,7 +253,18 @@ impl EditorTabs {
                 self.tabs.len() - 1
             }
         };
-        self.activate(index, window, cx);
+        match &self.restoring_active {
+            Some(active) if *active != self.tabs[index].path && self.active.is_some() => {
+                cx.emit(TabsChanged);
+                cx.notify();
+            }
+            _ => {
+                if self.restoring_active.as_ref() == Some(&self.tabs[index].path) {
+                    self.restoring_active = None;
+                }
+                self.activate(index, window, cx);
+            }
+        }
     }
 
     fn new_tab(
@@ -724,6 +752,44 @@ impl EditorTabs {
                         cx.listener(move |this, _: &ClickEvent, _, cx| this.keep_mine(id, cx)),
                     )),
             )
+    }
+
+    /// Reopens a saved session's tabs, each at its cursor, with `active` as the active tab.
+    pub fn restore(
+        &mut self,
+        tabs: &[TabState],
+        active: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.restoring_active = active.and_then(|i| tabs.get(i)).map(|t| t.path.clone());
+        for tab in tabs {
+            self.open(&tab.path, false, window, cx);
+            if let Some(pending) = self.pending.iter_mut().find(|p| p.path == tab.path) {
+                pending.cursor = Some((tab.line, tab.column));
+            }
+        }
+    }
+
+    /// The tabs as a session keeps them, and which one is active.
+    pub fn session_tabs(&self, cx: &App) -> (Vec<TabState>, Option<usize>) {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                let cursor = tab.editor.read(cx).cursor_position();
+                TabState {
+                    path: tab.path.clone(),
+                    line: cursor.line,
+                    column: cursor.character,
+                }
+            })
+            .collect();
+        (tabs, self.active)
+    }
+
+    pub fn preview_open(&self) -> bool {
+        self.preview.is_some()
     }
 
     pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {

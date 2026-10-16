@@ -2,7 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -29,22 +29,21 @@ pub struct Workspace {
     copy_seq: u64,
     /// Dropping it stops watching the old folder.
     _watcher: Option<watch::Watcher>,
+    /// Writes the session a moment after the last change.
+    save_task: Task<()>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 /// Opens the window. `arg` is a folder to open, or a file to open inside its folder.
 pub fn open(arg: Option<PathBuf>, cx: &mut App) {
+    let saved = session::load(&session::default_path());
+    theme::set_zoom(if saved.zoom == 0 { 100 } else { saved.zoom }, cx);
     let arg = arg.and_then(|p| std::fs::canonicalize(p).ok());
     let (root, file) = match arg {
         Some(path) if path.is_dir() => (Some(path), None),
         Some(path) => (path.parent().map(Path::to_path_buf), Some(path)),
-        None => (
-            session::load(&session::default_path())
-                .root
-                .filter(|r| r.is_dir()),
-            None,
-        ),
+        None => (saved.root.filter(|r| r.is_dir()), None),
     };
     let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
     let options = WindowOptions {
@@ -85,6 +84,10 @@ impl Workspace {
         let tabs = cx.new(|cx| EditorTabs::new(PathBuf::new(), cx));
         let subscriptions = vec![
             cx.subscribe(&tabs, |_, _, _: &TabsChanged, cx| cx.notify()),
+            cx.on_app_quit(|this, cx| {
+                this.save_session(cx);
+                async {}
+            }),
             cx.observe_window_appearance(window, |_, window, cx| {
                 gpui_kit::component::Theme::sync_system_appearance(Some(window), cx);
             }),
@@ -96,6 +99,7 @@ impl Workspace {
             copied: None,
             copy_seq: 0,
             _watcher: None,
+            save_task: Task::ready(()),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -119,13 +123,31 @@ impl Workspace {
         ));
         self.tabs = cx.new(|cx| EditorTabs::new(root.clone(), cx));
         self._subscriptions
-            .push(cx.subscribe(&self.tabs, |_, _, _: &TabsChanged, cx| cx.notify()));
+            .push(cx.subscribe(&self.tabs, |this, _, _: &TabsChanged, cx| {
+                this.schedule_save(cx);
+                cx.notify();
+            }));
+        self._subscriptions
+            .push(cx.observe(&panel, |this, _, cx| this.schedule_save(cx)));
         panel.read(cx).focus_handle(cx).focus(window, cx);
-        self.panel = Some(panel);
+        self.panel = Some(panel.clone());
         self.watch(&root, window, cx);
-        let mut saved = session::load(&session::default_path());
-        saved.root = Some(root);
-        let _ = session::save(&session::default_path(), &saved);
+        // The same folder as last time comes back as it was left.
+        let saved = session::load(&session::default_path());
+        if saved.root.as_deref() == Some(root.as_path()) {
+            panel.update(cx, |panel, cx| {
+                panel.restore(&saved.expanded, saved.selected.clone(), cx);
+                panel.width = saved.tree_width.unwrap_or(panel.width);
+                panel.show_key_hints = !saved.hide_key_hints;
+            });
+            self.tabs.update(cx, |tabs, cx| {
+                tabs.restore(&saved.tabs, saved.active_tab, window, cx);
+                if saved.preview {
+                    tabs.toggle_preview(cx);
+                }
+            });
+        }
+        self.schedule_save(cx);
         cx.notify();
     }
 
@@ -154,6 +176,39 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    /// What reopens next time: the folder, the tree, the tabs, the zoom.
+    fn snapshot(&self, cx: &App) -> session::Session {
+        let mut saved = session::Session {
+            zoom: cx.try_global::<theme::Zoom>().map_or(100, |z| z.0),
+            ..Default::default()
+        };
+        if let Some(panel) = &self.panel {
+            let panel = panel.read(cx);
+            saved.root = Some(panel.root().to_path_buf());
+            saved.expanded = panel.expanded_dirs();
+            saved.selected = panel.selected().map(Path::to_path_buf);
+            saved.tree_width = Some(panel.width);
+            saved.hide_key_hints = !panel.show_key_hints;
+        }
+        let tabs = self.tabs.read(cx);
+        (saved.tabs, saved.active_tab) = tabs.session_tabs(cx);
+        saved.preview = tabs.preview_open();
+        saved
+    }
+
+    fn save_session(&self, cx: &App) {
+        if let Err(err) = session::save(&session::default_path(), &self.snapshot(cx)) {
+            eprintln!("leaf: session not saved: {err}");
+        }
+    }
+
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.save_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let _ = this.update(cx, |this, cx| this.save_session(cx));
+        });
     }
 
     fn root(&self, cx: &App) -> Option<PathBuf> {
@@ -287,6 +342,7 @@ impl Workspace {
             ZOOM_STEPS[(index + step).clamp(0, ZOOM_STEPS.len() as i32 - 1) as usize]
         };
         theme::set_zoom(next, cx);
+        self.schedule_save(cx);
         cx.notify();
     }
 }
@@ -341,7 +397,8 @@ impl Render for Workspace {
                     .update(cx, |tabs, cx| tabs.activate_offset(1, window, cx))
             }))
             .on_action(cx.listener(|this, _: &TogglePreview, _, cx| {
-                this.tabs.update(cx, |tabs, cx| tabs.toggle_preview(cx))
+                this.tabs.update(cx, |tabs, cx| tabs.toggle_preview(cx));
+                this.schedule_save(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
