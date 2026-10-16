@@ -25,6 +25,11 @@ const ROW_GAP: f32 = 4.;
 const CHEVRON_SLOT: f32 = 12.;
 const CHEVRON_SIZE: f32 = 10.;
 
+/// Tree width limits at 100% zoom, and the strip at its right edge that drags it.
+const MIN_WIDTH: f32 = 180.;
+const MAX_WIDTH: f32 = 480.;
+const RESIZE_HANDLE: f32 = 4.;
+
 /// Key hint line spacing at 100% zoom.
 const HINT_PADDING: f32 = 8.;
 const HINT_GAP: f32 = 8.;
@@ -42,6 +47,10 @@ fn row_padding(depth: usize) -> f32 {
 /// The x of the indent guide at `level`: under the chevron center of that level's folder.
 fn guide_x(level: usize) -> f32 {
     row_padding(level) + CHEVRON_SLOT / 2.
+}
+
+fn clamp_width(width: f32) -> f32 {
+    width.clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
 /// The rows that fit whole in a list `list_height` tall, at least one so a page always moves.
@@ -68,7 +77,12 @@ pub struct ProjectPanel {
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     pub show_key_hints: bool,
+    /// The tree width at 100% zoom, dragged from its right edge. The session keeps it.
+    pub width: f32,
 }
+
+/// What the right edge drags; the panel resizes as it moves.
+struct ResizeDrag;
 
 impl EventEmitter<PanelEvent> for ProjectPanel {}
 
@@ -85,6 +99,7 @@ impl ProjectPanel {
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             show_key_hints: true,
+            width: size::TREE_WIDTH,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -334,7 +349,16 @@ impl Render for ProjectPanel {
             }))
             .on_action(cx.listener(|this, _: &Open, _, cx| this.open_selected(false, cx)))
             .on_action(cx.listener(|this, _: &LeafThrough, _, cx| this.open_selected(true, cx)))
-            .w(z(size::TREE_WIDTH, cx))
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
+                    let width = (event.event.position.x - event.bounds.left()).as_f32();
+                    this.width = clamp_width(width / theme::zoom(cx));
+                    cx.notify();
+                }),
+            )
+            .relative()
+            // Clamped here too: the width may come back from a saved session.
+            .w(z(clamp_width(self.width), cx))
             .h_full()
             .flex_none()
             .flex()
@@ -403,6 +427,19 @@ impl Render for ProjectPanel {
             .when(self.show_key_hints, |el| {
                 el.child(key_hints(selected_row.as_ref(), cx))
             })
+            .child(
+                // Inside the edge: the editor paints after the tree and would cover a handle outside it.
+                div()
+                    .id("tree-resize")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(z(RESIZE_HANDLE, cx))
+                    .occlude()
+                    .cursor_col_resize()
+                    .on_drag(ResizeDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
+            )
     }
 }
 
@@ -466,7 +503,7 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
 mod tests {
     use std::path::Path;
 
-    use super::{CHEVRON_SLOT, guide_x, row_padding, rows_per_page, tilde};
+    use super::{CHEVRON_SLOT, clamp_width, guide_x, row_padding, rows_per_page, tilde};
 
     #[test]
     fn guides_follow_the_design_formula() {
@@ -505,5 +542,12 @@ mod tests {
         assert_eq!(rows_per_page(220. * 1.5, 22. * 1.5), 10);
         // Before the first layout the list has no height; a page is still one row.
         assert_eq!(rows_per_page(0., 22.), 1);
+    }
+
+    #[test]
+    fn the_tree_width_stays_between_its_limits() {
+        assert_eq!(clamp_width(120.), 180.);
+        assert_eq!(clamp_width(300.), 300.);
+        assert_eq!(clamp_width(900.), 480.);
     }
 }
