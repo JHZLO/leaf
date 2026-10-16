@@ -105,11 +105,12 @@ pub struct ProjectPanel {
     pub width: f32,
     /// The speed search text while a search is on (IntelliJ: type in the tree to find a name).
     search: Option<String>,
-    /// Ends the search when focus leaves the tree. Made on first use: `new` has no window.
+    /// Ends the search and drops a name being typed when focus leaves the tree. Made on first
+    /// use: `new` has no window.
     focus_out: Option<Subscription>,
     /// The selection has no row yet (its folder is being read); scroll to it when it arrives.
     reveal_pending: bool,
-    /// A name being typed into the tree (Cmd+N).
+    /// A name being typed into the tree (Cmd+N, Shift+F6).
     edit: Option<Edit>,
 }
 
@@ -157,7 +158,6 @@ enum Item {
 }
 
 /// The input line and its refusal, as the list draws them.
-#[derive(Clone)]
 struct EditView {
     input: Entity<InputState>,
     error: Option<SharedString>,
