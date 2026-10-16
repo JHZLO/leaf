@@ -49,12 +49,15 @@ impl EditorSpike {
             .and_then(|e| e.to_str())
             .unwrap_or("text")
             .to_string();
+        // gpui-kit wraps by default; `LEAF_SPIKE_WRAP=0` turns it off to compare.
+        let wrap = std::env::var("LEAF_SPIKE_WRAP").map_or(true, |v| v != "0");
         let started = Instant::now();
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language(language.clone())
                 .line_number(true)
                 .searchable(true)
+                .soft_wrap(wrap)
                 .default_value(text)
         });
         log(
@@ -62,6 +65,7 @@ impl EditorSpike {
             format!("{:.1}", started.elapsed().as_secs_f64() * 1000.0),
         );
         log("language", &language);
+        log("wrap", wrap);
 
         window.on_next_frame(|_, _| log("first_frame_ms", format!("{:.1}", since_start_ms())));
 
@@ -237,6 +241,7 @@ fn main() {
     let arg = args.next();
 
     gpui_kit::application().run(move |cx| {
+        log("run_ms", format!("{:.1}", since_start_ms()));
         gpui_kit::init(cx);
         log("init_ms", format!("{:.1}", since_start_ms()));
         cx.bind_keys([
