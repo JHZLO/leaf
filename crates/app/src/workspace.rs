@@ -11,10 +11,11 @@ use leaf_project::{paths, session, watch};
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
     empty_state,
+    finder::{self, Finder, FinderEvent},
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, Open, OpenFolder,
-        PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, TogglePreview, WORKSPACE,
-        ZoomIn, ZoomOut, ZoomReset,
+        PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview,
+        WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{PanelEvent, ProjectPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
@@ -29,10 +30,19 @@ enum AfterDiscard {
     OpenFolder(PathBuf),
 }
 
+/// The open file finder.
+struct OpenFinder {
+    view: Entity<Finder>,
+    /// Where focus goes back when the finder closes without opening a file.
+    return_focus: Option<FocusHandle>,
+    _subscription: Subscription,
+}
+
 pub struct Workspace {
     panel: Option<Entity<ProjectPanel>>,
     tabs: Entity<EditorTabs>,
     tree_visible: bool,
+    finder: Option<OpenFinder>,
     copied: Option<Copied>,
     copy_seq: u64,
     /// Dropping it stops watching the old folder.
@@ -118,6 +128,7 @@ impl Workspace {
             panel: None,
             tabs,
             tree_visible: true,
+            finder: None,
             copied: None,
             copy_seq: 0,
             _watcher: None,
@@ -155,6 +166,8 @@ impl Workspace {
     }
 
     pub fn set_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A finder still open searches the old folder.
+        self.finder = None;
         let panel = cx.new(|cx| ProjectPanel::new(root.clone(), cx));
         self._subscriptions.push(cx.subscribe_in(
             &panel,
@@ -368,6 +381,54 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens the finder over the window, or closes it and gives focus back.
+    fn toggle_finder(&mut self, _: &ToggleFinder, window: &mut Window, cx: &mut Context<Self>) {
+        if self.finder.is_some() {
+            self.close_finder(true, window, cx);
+            return;
+        }
+        let Some(root) = self.root(cx) else {
+            return;
+        };
+        let view = cx.new(|cx| Finder::new(root, window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &FinderEvent, window, cx| match event {
+                FinderEvent::Open(path) => {
+                    this.close_finder(false, window, cx);
+                    this.tabs
+                        .update(cx, |tabs, cx| tabs.open(path, false, window, cx));
+                    this.focus_editor_area(window, cx);
+                }
+                FinderEvent::Dismiss => this.close_finder(true, window, cx),
+                FinderEvent::FocusLost => this.close_finder(false, window, cx),
+            },
+        );
+        let return_focus = window.focused(cx);
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        self.finder = Some(OpenFinder {
+            view,
+            return_focus,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// `restore_focus` gives focus back to where it was before the finder opened.
+    fn close_finder(&mut self, restore_focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(finder) = self.finder.take() else {
+            return;
+        };
+        if restore_focus {
+            match finder.return_focus {
+                Some(handle) => handle.focus(window, cx),
+                None => self.focus_editor_area(window, cx),
+            }
+        }
+        cx.notify();
+    }
+
     fn focus_editor(&mut self, _: &FocusEditor, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_editor_area(window, cx);
     }
@@ -521,6 +582,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::focus_tree))
             .on_action(cx.listener(Self::focus_editor))
+            .on_action(cx.listener(Self::toggle_finder))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
@@ -554,6 +616,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
             .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.zoom_by(0, cx)))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -595,5 +658,8 @@ impl Render for Workspace {
                 },
                 cx,
             ))
+            .when_some(self.finder.as_ref(), |el, finder| {
+                el.child(finder::overlay(finder.view.clone(), cx))
+            })
     }
 }
