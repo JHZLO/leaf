@@ -13,7 +13,7 @@ use crate::{
     empty_state,
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, OpenFolder, PrevTab,
-        Quit, Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        Quit, RevealInFinder, Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{PanelEvent, ProjectPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
@@ -393,6 +393,25 @@ impl Workspace {
         }
     }
 
+    /// Shows the tree selection, or the active file, in a Finder window.
+    fn reveal_in_finder(
+        &mut self,
+        _: &RevealInFinder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(root), Some((rel, _))) = (self.root(cx), self.copy_source(window, cx)) else {
+            return;
+        };
+        if let Err(err) = std::process::Command::new("open")
+            .arg("-R")
+            .arg(root.join(rel))
+            .spawn()
+        {
+            eprintln!("leaf: could not reveal in Finder: {err}");
+        }
+    }
+
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs
             .update(cx, |tabs, cx| tabs.save_active(window, cx));
@@ -457,6 +476,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(Self::reveal_in_finder))
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 // Without unsaved changes the app-wide handler quits.

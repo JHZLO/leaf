@@ -4,8 +4,8 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::keymap::{
-    CloseTab, CopyPath, CopyRelativePath, FocusTree, NextTab, OpenFolder, PrevTab, Quit, Save,
-    TogglePreview, ZoomIn, ZoomOut, ZoomReset,
+    CloseTab, CopyPath, CopyRelativePath, FocusTree, NextTab, OpenFolder, PrevTab, Quit,
+    RevealInFinder, Save, TogglePreview, ZoomIn, ZoomOut, ZoomReset,
 };
 
 fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
@@ -26,6 +26,8 @@ pub fn init(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
                 MenuItem::action("Close Tab", CloseTab),
+                MenuItem::separator(),
+                MenuItem::action("Reveal in Finder", RevealInFinder),
             ],
         ),
         menu(
