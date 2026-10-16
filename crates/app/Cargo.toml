@@ -29,3 +29,13 @@ gpui-kit = { workspace = true, features = [
     "tree-sitter-css",
 ] }
 gpui-pre-platform.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+tempfile.workspace = true
+
+# Offscreen UI checks with real rendering; AppKit needs the main thread, so no test harness.
+[[test]]
+name = "visual"
+harness = false

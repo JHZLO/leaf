@@ -87,7 +87,7 @@ pub fn open(arg: Option<PathBuf>, cx: &mut App) {
 }
 
 impl Workspace {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tabs = cx.new(|cx| EditorTabs::new(PathBuf::new(), cx));
         let subscriptions = vec![
             cx.subscribe(&tabs, |_, _, _: &TabsChanged, cx| cx.notify()),
@@ -261,6 +261,20 @@ impl Workspace {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let _ = this.update(cx, |this, cx| this.save_session(cx));
         });
+    }
+
+    /// The tree's selection, relative to the open folder.
+    pub fn tree_selection(&self, cx: &App) -> Option<PathBuf> {
+        self.panel
+            .as_ref()?
+            .read(cx)
+            .selected()
+            .map(Path::to_path_buf)
+    }
+
+    /// The active tab's file, relative to the open folder.
+    pub fn active_file(&self, cx: &App) -> Option<PathBuf> {
+        self.tabs.read(cx).active_tab().map(|t| t.path.clone())
     }
 
     fn root(&self, cx: &App) -> Option<PathBuf> {
