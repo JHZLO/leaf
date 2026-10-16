@@ -38,6 +38,15 @@ fn guide_x(level: usize) -> f32 {
     row_padding(level) + CHEVRON_SLOT / 2.
 }
 
+/// `path` with the home folder written as `~`, the way a shell prompt shows it.
+fn tilde(path: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| path.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 pub enum PanelEvent {
     /// Open a file. `leaf_through` keeps focus in the tree and reuses the leaf-through tab.
     Open { path: PathBuf, leaf_through: bool },
@@ -247,17 +256,15 @@ impl Render for ProjectPanel {
         let focused = self.focus_handle.contains_focused(window, cx);
         let rows = self.tree.rows();
         let selected = self.tree.selected().map(Path::to_path_buf);
-        let root_name = self
-            .tree
-            .root()
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let parent = self
-            .tree
-            .root()
+        let root = self.tree.root();
+        let root_name = root.file_name().map_or_else(
+            || root.display().to_string(),
+            |n| n.to_string_lossy().to_string(),
+        );
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let parent = root
             .parent()
-            .map(|p| p.display().to_string())
+            .map(|parent| tilde(parent, home.as_deref()))
             .unwrap_or_default();
         let page = self.page(cx);
         let count = rows.len();
@@ -296,18 +303,25 @@ impl Render for ProjectPanel {
             .child(
                 div()
                     .h(z(size::TREE_HEAD, cx))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_3p5()
+                    .gap(z(8., cx))
+                    .px(z(14., cx))
+                    .whitespace_nowrap()
                     .child(
                         div()
+                            .flex_none()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(c(p.ink))
                             .child(root_name),
                     )
                     .child(
+                        // A long parent path loses its start, keeping the folders nearest the root.
                         div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis_start()
                             .text_size(z(12., cx))
                             .text_color(c(p.sub))
                             .child(parent),
@@ -390,7 +404,9 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHEVRON_SLOT, guide_x, row_padding};
+    use std::path::Path;
+
+    use super::{CHEVRON_SLOT, guide_x, row_padding, tilde};
 
     #[test]
     fn guides_follow_the_design_formula() {
@@ -405,5 +421,19 @@ mod tests {
         for depth in 0..5 {
             assert_eq!(row_padding(depth) + CHEVRON_SLOT / 2., guide_x(depth));
         }
+    }
+
+    #[test]
+    fn the_home_folder_shows_as_a_tilde() {
+        let home = Some(Path::new("/Users/you"));
+        assert_eq!(
+            tilde(Path::new("/Users/you/Desktop/work"), home),
+            "~/Desktop/work"
+        );
+        assert_eq!(tilde(Path::new("/Users/you"), home), "~");
+        // Only whole folder names match: `/Users/younger` is not under `/Users/you`.
+        assert_eq!(tilde(Path::new("/Users/younger"), home), "/Users/younger");
+        assert_eq!(tilde(Path::new("/opt/work"), home), "/opt/work");
+        assert_eq!(tilde(Path::new("/opt/work"), None), "/opt/work");
     }
 }
