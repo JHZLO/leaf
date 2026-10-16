@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{prelude::FluentBuilder as _, *};
+use gpui_kit::{component::Icon, prelude::FluentBuilder as _, *};
 use leaf_project::{
     fs::{self, EntryKind},
     nav::{self, NavKey},
@@ -16,6 +16,27 @@ use crate::{
     },
     theme::{self, c, size, z},
 };
+
+/// Row geometry at 100% zoom, from the design mockup: the chevron slot of a row at depth `d`
+/// starts at `10 + 14d`, so a folder's chevron is centered on the guide its children draw.
+const ROW_PADDING_LEFT: f32 = 10.;
+const ROW_PADDING_RIGHT: f32 = 8.;
+const ROW_GAP: f32 = 4.;
+const CHEVRON_SLOT: f32 = 12.;
+const CHEVRON_SIZE: f32 = 10.;
+
+/// The mockup's chevron. Inline bytes keep the tree independent of a registered icon bundle.
+const CHEVRON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M3.5 2 L7 5 L3.5 8" fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
+
+/// Left padding of a row at `depth`.
+fn row_padding(depth: usize) -> f32 {
+    ROW_PADDING_LEFT + depth as f32 * size::TREE_INDENT
+}
+
+/// The x of the indent guide at `level`: under the chevron center of that level's folder.
+fn guide_x(level: usize) -> f32 {
+    row_padding(level) + CHEVRON_SLOT / 2.
+}
 
 pub enum PanelEvent {
     /// Open a file. `leaf_through` keeps focus in the tree and reuses the leaf-through tab.
@@ -140,16 +161,20 @@ impl ProjectPanel {
 
     fn render_row(row: &Row, selected: bool, cx: &App) -> Stateful<Div> {
         let p = theme::colors(cx);
-        let indent = size::TREE_INDENT;
+        let is_dir = row.kind == EntryKind::Dir;
         let mut el = div()
             .id(ElementId::Name(
                 row.path.to_string_lossy().to_string().into(),
             ))
             .relative()
+            .w_full()
             .flex()
             .items_center()
+            .gap(z(ROW_GAP, cx))
             .h(z(size::TREE_ROW, cx))
-            .pl(z(10. + row.depth as f32 * indent, cx))
+            .pl(z(row_padding(row.depth), cx))
+            .pr(z(ROW_PADDING_RIGHT, cx))
+            .whitespace_nowrap()
             .text_color(c(if selected {
                 p.sel_ink
             } else if row.ignored {
@@ -159,43 +184,57 @@ impl ProjectPanel {
             }))
             .when(selected, |el| el.bg(c(p.sel_bg)));
         for (level, guide) in row.guides.iter().enumerate() {
-            let x = 16. + level as f32 * indent;
-            let color = c(if guide.vein { p.accent } else { p.guide });
+            let x = guide_x(level);
+            // The 2 px vein covers the 1 px guide and one pixel to its left.
+            let (left, width, color) = if guide.vein {
+                (x - 1., 2., p.accent)
+            } else {
+                (x, 1., p.guide)
+            };
             el = el.child(
                 div()
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(z(if guide.vein { x - 1. } else { x }, cx))
-                    .w(z(if guide.vein { 2. } else { 1. }, cx))
-                    .bg(color),
+                    .left(z(left, cx))
+                    .w(z(width, cx))
+                    .bg(c(color)),
             );
             if guide.tick {
-                let width = if row.kind == EntryKind::Dir { 7. } else { 19. };
+                // A folder's tick stops before its chevron; a file's runs through the empty slot.
+                let tick = if is_dir { 7. } else { 19. };
                 el = el.child(
                     div()
                         .absolute()
-                        .top(z(10., cx))
+                        .top(z((size::TREE_ROW - 2.) / 2., cx))
                         .h(z(2., cx))
-                        .left(z(x - 1., cx))
-                        .w(z(width, cx))
-                        .bg(color),
+                        .left(z(left, cx))
+                        .w(z(tick, cx))
+                        .bg(c(color)),
                 );
             }
         }
-        let chevron = match (row.kind, row.expanded) {
-            (EntryKind::Dir, true) => "▾",
-            (EntryKind::Dir, false) => "▸",
-            (EntryKind::File, _) => "",
-        };
+        let chevron_color = c(if selected { p.sel_ink } else { p.sub });
         el.child(
             div()
-                .w(z(12., cx))
+                .size(z(CHEVRON_SLOT, cx))
                 .flex_none()
-                .text_color(c(if selected { p.sel_ink } else { p.sub }))
-                .child(chevron),
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(is_dir, |slot| {
+                    slot.child(
+                        Icon::default()
+                            .data(CHEVRON)
+                            .size(z(CHEVRON_SIZE, cx))
+                            .text_color(chevron_color)
+                            .when(row.expanded, |icon| {
+                                icon.rotate(radians(std::f32::consts::FRAC_PI_2))
+                            }),
+                    )
+                }),
         )
-        .child(div().ml_1().child(row.name.clone()))
+        .child(row.name.clone())
     }
 }
 
@@ -342,4 +381,24 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
                 )
                 .child(label)
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CHEVRON_SLOT, guide_x, row_padding};
+
+    #[test]
+    fn guides_follow_the_design_formula() {
+        // The design puts the guide of depth L at x = 16 + 14L.
+        for level in 0..5 {
+            assert_eq!(guide_x(level), 16. + 14. * level as f32);
+        }
+    }
+
+    #[test]
+    fn a_folder_chevron_sits_on_the_guide_of_its_children() {
+        for depth in 0..5 {
+            assert_eq!(row_padding(depth) + CHEVRON_SLOT / 2., guide_x(depth));
+        }
+    }
 }
