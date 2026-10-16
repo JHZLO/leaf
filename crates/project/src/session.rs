@@ -33,8 +33,12 @@ pub struct TabState {
     pub column: u32,
 }
 
-/// `~/Library/Application Support/leaf/session.json`.
+/// `~/Library/Application Support/leaf/session.json`, or `LEAF_SESSION_PATH` so tests and
+/// scripted runs never touch the real session.
 pub fn default_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("LEAF_SESSION_PATH") {
+        return PathBuf::from(path);
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
