@@ -56,3 +56,87 @@ pub fn save(path: &Path, session: &Session) -> io::Result<()> {
     let json = serde_json::to_vec_pretty(session).map_err(io::Error::other)?;
     std::fs::write(path, json)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> Session {
+        Session {
+            root: Some(PathBuf::from("/Users/me/notes")),
+            expanded: vec![PathBuf::from("docs"), PathBuf::from("docs/guide")],
+            selected: Some(PathBuf::from("docs/guide/a.md")),
+            tabs: vec![
+                TabState {
+                    path: PathBuf::from("docs/guide/a.md"),
+                    line: 11,
+                    column: 4,
+                },
+                TabState {
+                    path: PathBuf::from("readme.md"),
+                    line: 0,
+                    column: 0,
+                },
+            ],
+            active_tab: Some(1),
+            tree_width: Some(260.5),
+            preview: true,
+            zoom: 125,
+            hide_key_hints: true,
+        }
+    }
+
+    #[test]
+    fn a_saved_session_loads_back_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        // The folder under Application Support may not exist yet.
+        let path = dir.path().join("leaf/session.json");
+        save(&path, &sample()).unwrap();
+        assert_eq!(load(&path), sample());
+    }
+
+    #[test]
+    fn a_missing_session_loads_as_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load(&dir.path().join("session.json")), Session::default());
+    }
+
+    #[test]
+    fn a_corrupt_session_loads_as_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        for bytes in [
+            &b"not json"[..],
+            b"{\"root\": \"/Users/me/no",
+            b"{\"zoom\": \"large\"}",
+            b"[]",
+            b"\xff\xfe\x00",
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(load(&path), Session::default());
+        }
+    }
+
+    #[test]
+    fn missing_fields_take_their_defaults_and_unknown_ones_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        std::fs::write(
+            &path,
+            br#"{"zoom": 150, "tabs": [{"path": "a.md"}], "from_a_newer_leaf": 1}"#,
+        )
+        .unwrap();
+        let session = load(&path);
+        assert_eq!(session.zoom, 150);
+        assert_eq!(
+            session.tabs,
+            [TabState {
+                path: PathBuf::from("a.md"),
+                line: 0,
+                column: 0,
+            }]
+        );
+        assert_eq!(session.root, None);
+        assert!(!session.preview);
+    }
+}
