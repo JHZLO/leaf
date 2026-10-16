@@ -58,24 +58,106 @@ pub fn run(arg: Option<PathBuf>) {
         eprintln!("leaf: no settings file written: {err}");
     }
     // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
-    gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
-        .run(move |cx| {
-            init(cx);
-            menus::init(cx);
-            cx.on_action(|_: &keymap::Quit, cx| cx.quit());
-            cx.on_window_closed(|cx, id| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                } else {
-                    workspace::window_closed(id, cx);
-                }
-            })
-            .detach();
-            workspace::open_at_start(arg.into_iter().collect(), cx);
-            // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
-            if std::env::var_os("LEAF_BACKGROUND").is_none() {
-                cx.activate(true);
+    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    // Paths from Finder's Open With, `open -a leaf` and the leaf command. When they start leaf,
+    // macOS hands them over before launching finishes, so they wait in the channel until then.
+    let (opened, requests) = smol::channel::unbounded::<Vec<String>>();
+    app.on_open_urls(move |urls| {
+        let _ = opened.try_send(urls);
+    });
+    app.run(move |cx| {
+        init(cx);
+        menus::init(cx);
+        cx.on_action(|_: &keymap::Quit, cx| cx.quit());
+        cx.on_window_closed(|cx, id| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            } else {
+                workspace::window_closed(id, cx);
             }
-        });
+        })
+        .detach();
+        let mut paths: Vec<PathBuf> = arg.into_iter().collect();
+        while let Ok(urls) = requests.try_recv() {
+            paths.extend(urls.iter().filter_map(|url| path_from_url(url)));
+        }
+        workspace::open_at_start(paths, cx);
+        cx.spawn(async move |cx| {
+            while let Ok(urls) = requests.recv().await {
+                cx.update(|cx| {
+                    for path in urls.iter().filter_map(|url| path_from_url(url)) {
+                        workspace::open_path(&path, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+        // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
+        if std::env::var_os("LEAF_BACKGROUND").is_none() {
+            cx.activate(true);
+        }
+    });
+}
+
+/// The path in a `file://` URL as macOS sends it (percent-encoded, folders end in a slash).
+/// Other URLs are not leaf's.
+fn path_from_url(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut input = rest.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let hex = [input.next()?, input.next()?];
+            let hex = std::str::from_utf8(&hex).ok()?;
+            bytes.push(u8::from_str_radix(hex, 16).ok()?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    if bytes.len() > 1 && bytes.ends_with(b"/") {
+        bytes.pop();
+    }
+    use std::os::unix::ffi::OsStringExt as _;
+    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_from_url;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_file_url_becomes_its_path() {
+        assert_eq!(
+            path_from_url("file:///Users/me/notes/"),
+            Some(PathBuf::from("/Users/me/notes"))
+        );
+        assert_eq!(
+            path_from_url("file:///Users/me/My%20Notes/todo.md"),
+            Some(PathBuf::from("/Users/me/My Notes/todo.md"))
+        );
+        assert_eq!(
+            path_from_url("file://localhost/tmp/a%25b"),
+            Some(PathBuf::from("/tmp/a%b"))
+        );
+        // Korean names arrive as percent-encoded UTF-8.
+        assert_eq!(
+            path_from_url("file:///Users/me/%ED%95%9C%EA%B8%80.md"),
+            Some(PathBuf::from("/Users/me/한글.md"))
+        );
+        assert_eq!(path_from_url("file:///"), Some(PathBuf::from("/")));
+    }
+
+    #[test]
+    fn other_urls_are_not_paths() {
+        assert_eq!(path_from_url("https://example.com/a.md"), None);
+        assert_eq!(path_from_url("leaf://open"), None);
+        assert_eq!(path_from_url("file://server/share"), None);
+        assert_eq!(path_from_url("file:///bad%2"), None);
+        assert_eq!(path_from_url("file:///bad%zz"), None);
+    }
 }
