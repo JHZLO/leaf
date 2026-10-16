@@ -1,17 +1,27 @@
 //! The folder tree on the left: the vein toward the selection, key hints, and IntelliJ moves.
 
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
-use gpui_kit::{component::Icon, prelude::FluentBuilder as _, *};
+use gpui_kit::{
+    component::{
+        Icon,
+        input::{Input, InputEvent, InputState},
+    },
+    prelude::FluentBuilder as _,
+    *,
+};
 use leaf_project::{
-    fs::{self, EntryKind},
+    fs::{self, EntryKind, NameError},
     nav::{self, NavKey, SearchStep},
-    tree::{ProjectTree, Row},
+    tree::{Guide, ProjectTree, Row},
 };
 
 use crate::{
     keymap::{
-        Collapse, Expand, FocusEditor, LeafThrough, Open, PROJECT_PANEL, PageDown, PageUp,
+        Collapse, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
         SelectFirst, SelectLast, SelectNext, SelectPrev,
     },
     theme::{self, c, size, z},
@@ -33,6 +43,8 @@ const RESIZE_HANDLE: f32 = 4.;
 /// Speed search field spacing at 100% zoom.
 const SEARCH_MARGIN: f32 = 8.;
 const SEARCH_PADDING: f32 = 6.;
+/// The name input sits inside a row, one point clear of its top and bottom.
+const EDIT_HEIGHT: f32 = size::TREE_ROW - 2.;
 
 /// Key hint line spacing at 100% zoom.
 const HINT_PADDING: f32 = 8.;
@@ -89,6 +101,46 @@ pub struct ProjectPanel {
     focus_out: Option<Subscription>,
     /// The selection has no row yet (its folder is being read); scroll to it when it arrives.
     reveal_pending: bool,
+    /// A name being typed into the tree (Cmd+N).
+    edit: Option<Edit>,
+}
+
+/// A name being typed into the tree, in an input on its own line.
+struct Edit {
+    target: EditTarget,
+    input: Entity<InputState>,
+    /// Why the last Enter was refused, shown after the input.
+    error: Option<SharedString>,
+    /// The disk work for the last Enter has not come back yet.
+    busy: bool,
+    _subscription: Subscription,
+}
+
+#[derive(Clone)]
+enum EditTarget {
+    /// A new file, or a folder when the name ends in `/`, inside `dir`.
+    New { dir: PathBuf },
+}
+
+impl EditTarget {
+    fn hints(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            EditTarget::New { .. } => &[("↩", "Create"), ("Esc", "Cancel")],
+        }
+    }
+}
+
+/// One line of the list: a tree row, or the input for a new item right under its folder.
+enum Item {
+    Row(Row),
+    New { depth: usize, guides: Vec<Guide> },
+}
+
+/// The input line and its refusal, as the list draws them.
+#[derive(Clone)]
+struct EditView {
+    input: Entity<InputState>,
+    error: Option<SharedString>,
 }
 
 /// What the right edge drags; the panel resizes as it moves.
@@ -113,6 +165,7 @@ impl ProjectPanel {
             search: None,
             focus_out: None,
             reveal_pending: false,
+            edit: None,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -171,7 +224,6 @@ impl ProjectPanel {
     /// Selects `rel` (relative to the open folder) and opens the folders above it, reading the
     /// ones not read yet, then scrolls to it once its row is there. The workspace calls it to
     /// follow the active tab.
-    #[expect(dead_code, reason = "the workspace is not calling it yet")]
     pub fn reveal(&mut self, rel: &Path, cx: &mut Context<Self>) {
         for dir in self.tree.reveal(rel) {
             self.load_dir(dir, cx);
@@ -195,6 +247,10 @@ impl ProjectPanel {
     }
 
     fn apply(&mut self, key: NavKey, cx: &mut Context<Self>) {
+        // The tree stays put while a name is typed: arrows that reach here were the input's.
+        if self.edit.is_some() {
+            return;
+        }
         // Every move but Up and Down ends a speed search.
         self.search = None;
         let outcome = nav::navigate(&self.tree.rows(), self.tree.selected(), key);
@@ -215,6 +271,9 @@ impl ProjectPanel {
 
     /// Up and Down walk the matches while a speed search is on, the rows otherwise.
     fn up_down(&mut self, key: NavKey, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
         match (&self.search, key) {
             (Some(_), NavKey::Up) => self.search_step(SearchStep::Prev, cx),
             (Some(_), _) => self.search_step(SearchStep::Next, cx),
@@ -238,6 +297,10 @@ impl ProjectPanel {
     /// Typing a name starts or extends a speed search; Backspace takes a character back.
     /// Keys with a binding (arrows, Enter, Space, Escape) arrive as actions instead.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // While a name is being typed, the keys belong to its input.
+        if self.edit.is_some() {
+            return;
+        }
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         // Option types special characters on macOS; leave it, like Cmd and Ctrl, to shortcuts.
@@ -269,13 +332,182 @@ impl ProjectPanel {
         cx.stop_propagation();
     }
 
-    /// Escape clears a speed search first; with none, it goes on to focus the editor.
-    fn escape(&mut self, cx: &mut Context<Self>) {
-        if self.search.take().is_some() {
+    /// Escape cancels a name being typed or clears a speed search; with neither, it goes on
+    /// to focus the editor.
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            self.end_edit(window, cx);
+        } else if self.search.take().is_some() {
             cx.notify();
         } else {
             cx.propagate();
         }
+    }
+
+    /// Cmd+N: an input for a new item under the selected folder, or the selected file's folder.
+    fn new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
+        self.search = None;
+        let rows = self.tree.rows();
+        let selected = self
+            .tree
+            .selected()
+            .and_then(|s| rows.iter().find(|r| r.path == s));
+        let dir = match selected {
+            Some(row) if row.kind == EntryKind::Dir && !row.loops => row.path.clone(),
+            Some(row) => row.path.parent().map(Path::to_path_buf).unwrap_or_default(),
+            None => PathBuf::new(),
+        };
+        if !dir.as_os_str().is_empty() && self.tree.expand(&dir) {
+            self.load_dir(dir.clone(), cx);
+        }
+        self.start_edit(EditTarget::New { dir }, "", 0..0, window, cx);
+        if let Some(index) = self
+            .items(self.tree.rows())
+            .iter()
+            .position(|item| matches!(item, Item::New { .. }))
+        {
+            self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Puts an input with `text` in the tree, `select` selected, and gives it focus.
+    fn start_edit(
+        &mut self,
+        target: EditTarget,
+        text: &str,
+        select: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| InputState::new(window, cx));
+        input.update(cx, |state, cx| {
+            state.set_value(text.to_string(), window, cx);
+            state.set_selected_range(select, cx);
+            state.focus(window, cx);
+        });
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.commit_edit(window, cx),
+                InputEvent::Change => {
+                    if let Some(edit) = &mut this.edit {
+                        edit.error = None;
+                        cx.notify();
+                    }
+                }
+                _ => {}
+            },
+        );
+        self.watch_focus(window, cx);
+        self.edit = Some(Edit {
+            target,
+            input,
+            error: None,
+            busy: false,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Enter in the input: does the disk work off the main thread.
+    fn commit_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = &mut self.edit else {
+            return;
+        };
+        if edit.busy {
+            return;
+        }
+        edit.busy = true;
+        let typed = edit.input.read(cx).value().to_string();
+        let root = self.tree.root().to_path_buf();
+        match edit.target.clone() {
+            EditTarget::New { dir } => {
+                let work = cx.background_executor().spawn({
+                    let dir = dir.clone();
+                    async move { fs::create(&root, &dir, &typed) }
+                });
+                cx.spawn_in(window, async move |this, cx| {
+                    let result = work.await;
+                    let _ = this
+                        .update_in(cx, |this, window, cx| this.created(dir, result, window, cx));
+                })
+                .detach();
+            }
+        }
+    }
+
+    fn created(
+        &mut self,
+        dir: PathBuf,
+        result: Result<(PathBuf, EntryKind), NameError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (path, kind) = match result {
+            Ok(created) => created,
+            Err(err) => return self.refused(err, cx),
+        };
+        self.end_edit(window, cx);
+        // The folder it went into changed; `reveal` reads the folders made on the way.
+        self.load_dir(dir, cx);
+        self.reveal(&path, cx);
+        if kind == EntryKind::File {
+            cx.emit(PanelEvent::Open {
+                path,
+                leaf_through: false,
+            });
+        }
+    }
+
+    /// Keeps the input open with the reason after it.
+    fn refused(&mut self, err: NameError, cx: &mut Context<Self>) {
+        if let Some(edit) = &mut self.edit {
+            edit.busy = false;
+            edit.error = Some(err.to_string().into());
+        }
+        cx.notify();
+    }
+
+    /// Drops the input and gives the tree its focus back.
+    fn end_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.take().is_some() {
+            self.focus_handle.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The list lines: the rows, with the new-item input under its folder.
+    fn items(&self, rows: Vec<Row>) -> Vec<Item> {
+        let mut items: Vec<Item> = rows.into_iter().map(Item::Row).collect();
+        let Some(EditTarget::New { dir }) = self.edit.as_ref().map(|e| &e.target) else {
+            return items;
+        };
+        // Right under the folder's row, one level in. The open folder is no row: on top.
+        let (at, depth) = items
+            .iter()
+            .enumerate()
+            .find_map(|(i, item)| match item {
+                Item::Row(row) if &row.path == dir => Some((i + 1, row.depth + 1)),
+                _ => None,
+            })
+            .unwrap_or((0, 0));
+        // The vein runs through the new line wherever it runs through the line below it.
+        let below = match items.get(at) {
+            Some(Item::Row(row)) => row.guides.as_slice(),
+            _ => &[],
+        };
+        let guides = (0..depth)
+            .map(|level| Guide {
+                vein: below.get(level).is_some_and(|g| g.vein),
+                tick: false,
+            })
+            .collect();
+        items.insert(at, Item::New { depth, guides });
+        items
     }
 
     fn watch_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -283,6 +515,7 @@ impl ProjectPanel {
             self.focus_out = Some(
                 cx.on_focus_out(&self.focus_handle, window, |this, _, _, cx| {
                     this.search = None;
+                    this.edit = None;
                     cx.notify();
                 }),
             );
@@ -294,10 +527,9 @@ impl ProjectPanel {
     fn reveal_selection(&mut self) {
         let selected = self.tree.selected();
         let index = self
-            .tree
-            .rows()
+            .items(self.tree.rows())
             .iter()
-            .position(|r| Some(r.path.as_path()) == selected);
+            .position(|item| matches!(item, Item::Row(r) if Some(r.path.as_path()) == selected));
         if let Some(index) = index {
             self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         }
@@ -355,42 +587,28 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
-    /// The part of the name a speed search for `query` matched is set in medium weight.
-    fn render_row(
-        row: &Row,
-        selected: bool,
-        focused: bool,
-        query: Option<&str>,
+    /// A tree line at `depth`: height, indent and its guides with the vein. `is_dir` sets how far
+    /// the vein's tick reaches into the line.
+    fn row_frame(
+        id: impl Into<ElementId>,
+        depth: usize,
+        guides: &[Guide],
+        is_dir: bool,
         cx: &App,
     ) -> Stateful<Div> {
         let p = theme::colors(cx);
-        let is_dir = row.kind == EntryKind::Dir;
-        let (ink, chevron_color) = match (selected, focused) {
-            (true, true) => (p.sel_ink, p.sel_ink),
-            (true, false) => (p.ink, p.sub),
-            (false, _) if row.ignored => (p.ignored, p.sub),
-            (false, _) => (p.ink, p.sub),
-        };
         let mut el = div()
-            .id(ElementId::Name(
-                row.path.to_string_lossy().to_string().into(),
-            ))
+            .id(id)
             .relative()
             .w_full()
             .flex()
             .items_center()
             .gap(z(ROW_GAP, cx))
             .h(z(size::TREE_ROW, cx))
-            .pl(z(row_padding(row.depth), cx))
+            .pl(z(row_padding(depth), cx))
             .pr(z(ROW_PADDING_RIGHT, cx))
-            .whitespace_nowrap()
-            .text_color(c(ink))
-            .when(selected, |el| {
-                el.bg(c(if focused { p.sel_bg } else { p.guide }))
-            })
-            .when(!selected, |el| el.hover(|style| style.bg(c(p.hover))));
-        for (level, guide) in row.guides.iter().enumerate() {
+            .whitespace_nowrap();
+        for (level, guide) in guides.iter().enumerate() {
             let x = guide_x(level);
             // The 2 px vein covers the 1 px guide and one pixel to its left.
             let (left, width, color) = if guide.vein {
@@ -421,7 +639,39 @@ impl ProjectPanel {
                 );
             }
         }
-        el.child(
+        el
+    }
+
+    /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
+    /// The part of the name a speed search for `query` matched is set in medium weight.
+    fn render_row(
+        row: &Row,
+        selected: bool,
+        focused: bool,
+        query: Option<&str>,
+        cx: &App,
+    ) -> Stateful<Div> {
+        let p = theme::colors(cx);
+        let is_dir = row.kind == EntryKind::Dir;
+        let (ink, chevron_color) = match (selected, focused) {
+            (true, true) => (p.sel_ink, p.sel_ink),
+            (true, false) => (p.ink, p.sub),
+            (false, _) if row.ignored => (p.ignored, p.sub),
+            (false, _) => (p.ink, p.sub),
+        };
+        Self::row_frame(
+            ElementId::Name(row.path.to_string_lossy().to_string().into()),
+            row.depth,
+            &row.guides,
+            is_dir,
+            cx,
+        )
+        .text_color(c(ink))
+        .when(selected, |el| {
+            el.bg(c(if focused { p.sel_bg } else { p.guide }))
+        })
+        .when(!selected, |el| el.hover(|style| style.bg(c(p.hover))))
+        .child(
             div()
                 .size(z(CHEVRON_SLOT, cx))
                 .flex_none()
@@ -442,6 +692,13 @@ impl ProjectPanel {
         )
         .child(name_label(&row.name, query))
     }
+
+    /// The line where a new item's name is typed, under its folder.
+    fn render_new(depth: usize, guides: &[Guide], edit: &EditView, cx: &App) -> Stateful<Div> {
+        Self::row_frame("tree-new", depth, guides, false, cx)
+            .child(div().size(z(CHEVRON_SLOT, cx)).flex_none())
+            .child(edit_field(edit, cx))
+    }
 }
 
 /// A row's name, its speed search match in medium weight.
@@ -457,6 +714,48 @@ fn name_label(name: &str, query: Option<&str>) -> StyledText {
         )]),
         None => text,
     }
+}
+
+/// The name input of a tree line and, after it, why the last Enter was refused.
+fn edit_field(edit: &EditView, cx: &App) -> impl IntoElement {
+    let p = theme::colors(cx);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(z(ROW_GAP, cx))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(z(EDIT_HEIGHT, cx))
+                .overflow_hidden()
+                .rounded(z(4., cx))
+                .border_1()
+                .border_color(c(p.line))
+                .bg(c(p.paper))
+                // A click inside stays there; the tree's own mouse-down would take the focus back.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    Input::new(&edit.input)
+                        .appearance(false)
+                        .size_full()
+                        .px(z(SEARCH_PADDING, cx))
+                        .py_0()
+                        .text_size(z(size::UI_TEXT, cx))
+                        .line_height(z(EDIT_HEIGHT - 2., cx)),
+                ),
+        )
+        .when_some(edit.error.clone(), |el, error| {
+            el.child(
+                div()
+                    .flex_none()
+                    .text_size(z(12., cx))
+                    .text_color(c(p.sub))
+                    .child(error),
+            )
+        })
 }
 
 /// The line at the top of the list that shows what a speed search is looking for.
@@ -499,11 +798,16 @@ impl Render for ProjectPanel {
             .parent()
             .map(|parent| tilde(parent, home.as_deref()))
             .unwrap_or_default();
-        let count = rows.len();
         let selected_row = selected
             .as_ref()
             .and_then(|s| rows.iter().find(|r| &r.path == s))
             .cloned();
+        let items = self.items(rows);
+        let count = items.len();
+        let hints = match &self.edit {
+            Some(edit) => edit.target.hints(),
+            None => hint_keys(selected_row.as_ref()),
+        };
         div()
             .key_context(PROJECT_PANEL)
             .track_focus(&self.focus_handle)
@@ -511,6 +815,7 @@ impl Render for ProjectPanel {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
                     this.search = None;
+                    this.edit = None;
                     this.focus_handle.focus(window, cx)
                 }),
             )
@@ -530,11 +835,22 @@ impl Render for ProjectPanel {
                 this.apply(NavKey::PageDown(page), cx)
             }))
             .on_action(cx.listener(|this, _: &Open, _, cx| {
-                this.search = None;
-                this.open_selected(false, cx)
+                // Enter in a name input reaches here after the input took it.
+                if this.edit.is_none() {
+                    this.search = None;
+                    this.open_selected(false, cx)
+                }
             }))
-            .on_action(cx.listener(|this, _: &FocusEditor, _, cx| this.escape(cx)))
-            .on_action(cx.listener(|this, _: &LeafThrough, _, cx| this.open_selected(true, cx)))
+            .on_action(cx.listener(|this, _: &FocusEditor, window, cx| this.escape(window, cx)))
+            .on_action(cx.listener(|this, _: &LeafThrough, _, cx| {
+                if this.edit.is_some() {
+                    // Space is bound in the tree; let it go on and type into the name.
+                    cx.propagate();
+                } else {
+                    this.open_selected(true, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewFile, window, cx| this.new_file(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     let width = (event.event.position.x - event.bounds.left()).as_f32();
@@ -585,29 +901,39 @@ impl Render for ProjectPanel {
             })
             .child(
                 uniform_list("project-tree", count, {
-                    let rows = rows.clone();
                     let selected = selected.clone();
                     let query = self.search.clone();
+                    let edit = self.edit.as_ref().map(|edit| EditView {
+                        input: edit.input.clone(),
+                        error: edit.error.clone(),
+                    });
                     let panel = cx.weak_entity();
                     move |range, _, cx| {
-                        rows[range]
+                        items[range]
                             .iter()
-                            .map(|row| {
-                                let (path, kind) = (row.path.clone(), row.kind);
-                                let panel = panel.clone();
-                                Self::render_row(
-                                    row,
-                                    selected.as_deref() == Some(row.path.as_path()),
-                                    focused,
-                                    query.as_deref(),
-                                    cx,
-                                )
-                                .on_click(move |event, _, cx| {
-                                    let count = event.click_count();
-                                    let _ = panel.update(cx, |this, cx| {
-                                        this.click_row(path.clone(), kind, count, cx)
-                                    });
-                                })
+                            .map(|item| match (item, &edit) {
+                                (Item::Row(row), _) => {
+                                    let (path, kind) = (row.path.clone(), row.kind);
+                                    let panel = panel.clone();
+                                    Self::render_row(
+                                        row,
+                                        selected.as_deref() == Some(row.path.as_path()),
+                                        focused,
+                                        query.as_deref(),
+                                        cx,
+                                    )
+                                    .on_click(move |event, _, cx| {
+                                        let count = event.click_count();
+                                        let _ = panel.update(cx, |this, cx| {
+                                            this.click_row(path.clone(), kind, count, cx)
+                                        });
+                                    })
+                                    .into_any_element()
+                                }
+                                (Item::New { depth, guides }, Some(edit)) => {
+                                    Self::render_new(*depth, guides, edit, cx).into_any_element()
+                                }
+                                (Item::New { .. }, None) => div().into_any_element(),
                             })
                             .collect()
                     }
@@ -615,9 +941,7 @@ impl Render for ProjectPanel {
                 .track_scroll(&self.scroll)
                 .flex_1(),
             )
-            .when(self.show_key_hints, |el| {
-                el.child(key_hints(selected_row.as_ref(), cx))
-            })
+            .when(self.show_key_hints, |el| el.child(key_hints(hints, cx)))
             .child(
                 // Inside the edge: the editor paints after the tree and would cover a handle outside it.
                 div()
@@ -657,9 +981,8 @@ fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] 
     }
 }
 
-fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
+fn key_hints(keys: &'static [(&'static str, &'static str)], cx: &App) -> impl IntoElement {
     let p = theme::colors(cx);
-    let keys = hint_keys(selected);
     // Tighter than the mockup (12 / 12 / 5 / 5): at the default width the file hints need every
     // point. A hint that still does not fit wraps onto a hidden second line instead of being cut.
     div()

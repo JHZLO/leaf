@@ -355,6 +355,87 @@ pub fn write_target(path: &Path) -> PathBuf {
 /// The same limit macOS puts on links followed while resolving one path.
 const MAX_SYMLINK_HOPS: usize = 32;
 
+/// Why a name typed into the tree was not used. The text is what the tree shows after the input.
+#[derive(Debug)]
+pub enum NameError {
+    Empty,
+    /// `.` or `..`, an empty folder name (`a//b`), or a path that starts at `/`.
+    Invalid,
+    /// Something by that name is already there; leaf never replaces it.
+    Exists,
+    /// A folder on the way is a file.
+    NotAFolder(String),
+    Io(io::Error),
+}
+
+impl std::fmt::Display for NameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NameError::Empty => write!(f, "Type a name"),
+            NameError::Invalid => write!(f, "Not a valid name"),
+            NameError::Exists => write!(f, "Already exists"),
+            NameError::NotAFolder(name) => write!(f, "“{name}” is a file"),
+            NameError::Io(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<io::Error> for NameError {
+    fn from(err: io::Error) -> Self {
+        NameError::Io(err)
+    }
+}
+
+/// One file or folder name: not empty, and not a step in place or up.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".."
+}
+
+/// Creates what was typed inside the folder `dir` (relative to `root`): a file, or a folder
+/// when the text ends in `/`. `a/b/c.md` also creates the folders `a` and `a/b` on the way.
+/// Returns the new item relative to `root`. Nothing that exists is ever replaced.
+pub fn create(root: &Path, dir: &Path, typed: &str) -> Result<(PathBuf, EntryKind), NameError> {
+    let typed = typed.trim();
+    let (name, kind) = match typed.strip_suffix('/') {
+        Some(name) => (name, EntryKind::Dir),
+        None => (typed, EntryKind::File),
+    };
+    if name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    let parts: Vec<&str> = name.split('/').collect();
+    if !parts.iter().all(|part| valid_name(part)) {
+        return Err(NameError::Invalid);
+    }
+    // Name a file that stands where a folder should be, rather than the system's "File exists".
+    let mut on_the_way = root.join(dir);
+    for part in &parts[..parts.len() - 1] {
+        on_the_way.push(part);
+        if std::fs::symlink_metadata(&on_the_way).is_ok() && !on_the_way.is_dir() {
+            return Err(NameError::NotAFolder(part.to_string()));
+        }
+    }
+    let rel = dir.join(name);
+    let abs = root.join(&rel);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let made = match kind {
+        EntryKind::Dir => std::fs::create_dir(&abs),
+        // `create_new` checks and creates in one step, so a file that appears meanwhile is kept.
+        EntryKind::File => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&abs)
+            .map(drop),
+    };
+    match made {
+        Ok(()) => Ok((rel, kind)),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(NameError::Exists),
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
@@ -703,6 +784,114 @@ mod tests {
         // The temporary file went next to the target, and nothing was left behind.
         assert_eq!(dir_names(&docs), ["link.md"]);
         assert_eq!(dir_names(&notes), ["real.md"]);
+    }
+
+    fn created(root: &Path, dir: &str, typed: &str) -> Result<(String, EntryKind), String> {
+        create(root, Path::new(dir), typed)
+            .map(|(path, kind)| (path.to_str().unwrap().to_string(), kind))
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn creates_an_empty_file_in_the_folder() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("docs")).unwrap();
+        assert_eq!(
+            created(root.path(), "docs", "new.md"),
+            Ok(("docs/new.md".into(), EntryKind::File))
+        );
+        assert_eq!(
+            read_text(&root.path().join("docs/new.md")).unwrap().text,
+            ""
+        );
+        // The open folder itself is the empty path.
+        assert_eq!(
+            created(root.path(), "", " top.md "),
+            Ok(("top.md".into(), EntryKind::File))
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_creates_a_folder() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            created(root.path(), "", "notes/"),
+            Ok(("notes".into(), EntryKind::Dir))
+        );
+        assert!(root.path().join("notes").is_dir());
+    }
+
+    #[test]
+    fn creates_the_folders_on_the_way() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a/keep.md"), "kept\n");
+        assert_eq!(
+            created(root.path(), "", "a/b/c.md"),
+            Ok(("a/b/c.md".into(), EntryKind::File))
+        );
+        assert!(root.path().join("a/b/c.md").is_file());
+        assert_eq!(dir_names(&root.path().join("a")), ["b", "keep.md"]);
+        assert_eq!(
+            created(root.path(), "a", "x/y/"),
+            Ok(("a/x/y".into(), EntryKind::Dir))
+        );
+        assert!(root.path().join("a/x/y").is_dir());
+    }
+
+    #[test]
+    fn never_replaces_what_is_there() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a.md"), "mine\n");
+        std::fs::create_dir(root.path().join("docs")).unwrap();
+        assert_eq!(
+            created(root.path(), "", "a.md"),
+            Err("Already exists".into())
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("a.md")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            created(root.path(), "", "docs/"),
+            Err("Already exists".into())
+        );
+        assert_eq!(
+            created(root.path(), "", "docs"),
+            Err("Already exists".into())
+        );
+        assert_eq!(
+            created(root.path(), "", "a.md/"),
+            Err("Already exists".into())
+        );
+        assert_eq!(
+            created(root.path(), "", "a.md/b.md"),
+            Err("“a.md” is a file".into())
+        );
+        assert_eq!(dir_names(root.path()), ["a.md", "docs"]);
+    }
+
+    #[test]
+    fn refuses_names_that_leave_or_skip_a_folder() {
+        let root = tempfile::tempdir().unwrap();
+        for typed in [
+            "..",
+            ".",
+            "../out.md",
+            "a/../b.md",
+            "a//b.md",
+            "/abs.md",
+            "//",
+        ] {
+            assert_eq!(
+                created(root.path(), "", typed),
+                Err("Not a valid name".into()),
+                "{typed}"
+            );
+        }
+        for typed in ["", "   ", "/"] {
+            assert_eq!(created(root.path(), "", typed), Err("Type a name".into()));
+        }
+        assert!(dir_names(root.path()).is_empty());
     }
 
     #[test]
