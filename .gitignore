@@ -1,0 +1,27 @@
+# Rust build output
+/target
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?
+
+# Local secrets and environment
+.env
+.env.*
+*.pem
+*.key
+
+# Local agent and personal tool settings
+.claude/
+.codex/
+.gemini/
+.agents/
+skills-lock.json
+/AGENTS.md
+/CLAUDE.md
+
+# Local planning notes
+/PRD.md
