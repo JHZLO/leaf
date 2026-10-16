@@ -31,6 +31,9 @@ fn main() {
         })
         .detach();
         workspace::open(arg, cx);
-        cx.activate(true);
+        // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
+        if std::env::var_os("LEAF_BACKGROUND").is_none() {
+            cx.activate(true);
+        }
     });
 }
