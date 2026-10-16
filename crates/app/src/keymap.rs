@@ -48,6 +48,16 @@ actions!(
     ]
 );
 
+/// Around the editor of a Markdown tab.
+pub const MARKDOWN: &str = "Markdown";
+/// gpui-kit's editor ("Input") inside a Markdown tab.
+const MARKDOWN_EDITOR: &str = "Markdown > Input";
+
+actions!(
+    markdown,
+    [Newline, IndentItem, OutdentItem, ToggleBold, ToggleItalic]
+);
+
 pub fn init(cx: &mut App) {
     let ws = Some(WORKSPACE);
     let panel = Some(PROJECT_PANEL);
@@ -87,5 +97,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SelectNext, Some("Workspace && empty")),
         KeyBinding::new("enter", Open, Some("Workspace && empty")),
         // Markdown editing keys (Phase 2) go below this line, in their own block.
+        // gpui-kit binds enter and tab on its editor element ("Input"), deeper than any container.
+        // These match that same element, so they tie on depth and, added later, run first. When a
+        // line is not a list item the handler propagates and GPUI moves on to gpui-kit's binding.
+        KeyBinding::new("enter", Newline, Some(MARKDOWN_EDITOR)),
+        KeyBinding::new("tab", IndentItem, Some(MARKDOWN_EDITOR)),
+        KeyBinding::new("shift-tab", OutdentItem, Some(MARKDOWN_EDITOR)),
+        KeyBinding::new("cmd-b", ToggleBold, Some(MARKDOWN_EDITOR)),
+        KeyBinding::new("cmd-i", ToggleItalic, Some(MARKDOWN_EDITOR)),
     ]);
 }

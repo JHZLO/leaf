@@ -2,6 +2,7 @@
 
 use std::{
     io,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -9,18 +10,24 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _,
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
-    input::{Editor, EditorState, InputEvent, Position, RopeExt as _},
+    input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use leaf_project::{
     fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile},
+    markdown::{self, Edit, Emphasis},
     session::TabState,
 };
 
 use crate::{
+    keymap::{IndentItem, MARKDOWN, Newline, OutdentItem, ToggleBold, ToggleItalic},
     preview::Preview,
     theme::{self, c, size, z},
 };
+
+/// How far up and down from a list item Tab looks for its list's indent unit; nearby lines
+/// show it, and the bound keeps the key cheap in a long block.
+const LIST_LOOKAROUND: usize = 100;
 
 pub struct Tab {
     /// Relative to the open folder.
@@ -825,6 +832,85 @@ impl EditorTabs {
         preview.update(cx, |preview, cx| preview.show(source, cx));
     }
 
+    /// The active tab's editor when it is Markdown, has the keyboard and takes edits. Anything
+    /// else (the find bar, a read-only file, an IME composition) keeps gpui-kit's own keys.
+    fn markdown_editor(&self, window: &mut Window, cx: &mut App) -> Option<Entity<EditorState>> {
+        let tab = self
+            .active_tab()
+            .filter(|t| t.is_markdown() && !t.read_only)?;
+        let editor = tab.editor.clone();
+        if !editor.focus_handle(cx).is_focused(window) {
+            return None;
+        }
+        let composing = editor.update(cx, |state, cx| {
+            state.marked_text_range(window, cx).is_some()
+        });
+        (!composing).then_some(editor)
+    }
+
+    /// Runs a Markdown editing key. `edit` gets the text and the selection and says what to
+    /// change, relative to an offset. With nothing to change the key propagates, and GPUI goes on
+    /// to gpui-kit's binding for the same key (its newline, its tab).
+    fn edit_markdown(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&Rope, Range<usize>) -> Option<(usize, Edit)>,
+    ) {
+        let applied = self.markdown_editor(window, cx).is_some_and(|editor| {
+            editor.update(cx, |state, cx| {
+                let Some((base, edit)) = edit(state.text(), state.selected_range()) else {
+                    return false;
+                };
+                // A single replace, so one undo takes it back.
+                state.set_selected_range(base + edit.range.start..base + edit.range.end, cx);
+                state.replace(edit.text, window, cx);
+                let selection = edit.selection;
+                state.set_selected_range(base + selection.start..base + selection.end, cx);
+                true
+            })
+        });
+        if !applied {
+            cx.propagate();
+        }
+    }
+
+    fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit_markdown(window, cx, |text, selection| {
+            if !selection.is_empty() {
+                return None;
+            }
+            let (_, start, line) = line_at(text, selection.start);
+            markdown::enter(&line, selection.start - start).map(|edit| (start, edit))
+        });
+    }
+
+    fn indent_item(&mut self, _: &IndentItem, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit_markdown(window, cx, |text, selection| {
+            let (row, start, line) = single_line(text, &selection)?;
+            let local = selection.start - start..selection.end - start;
+            markdown::indent(&line, local, &list_unit(text, row)).map(|edit| (start, edit))
+        });
+    }
+
+    fn outdent_item(&mut self, _: &OutdentItem, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit_markdown(window, cx, |text, selection| {
+            let (row, start, line) = single_line(text, &selection)?;
+            let local = selection.start - start..selection.end - start;
+            markdown::outdent(&line, local, &list_unit(text, row)).map(|edit| (start, edit))
+        });
+    }
+
+    fn toggle_emphasis(&mut self, emphasis: Emphasis, window: &mut Window, cx: &mut Context<Self>) {
+        self.edit_markdown(window, cx, |text, selection| {
+            let (_, start, _) = line_at(text, selection.start);
+            let end = text.line_end_offset(text.offset_to_point(selection.end).row);
+            let lines = text.slice(start..end).to_string();
+            let local = selection.start - start..selection.end - start;
+            Some((start, markdown::toggle_emphasis(&lines, local, emphasis)))
+        });
+    }
+
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
         let tabs: Vec<_> = self
@@ -900,6 +986,37 @@ impl EditorTabs {
     }
 }
 
+/// The line holding `offset`: its row, where it starts, and its text.
+fn line_at(text: &Rope, offset: usize) -> (usize, usize, String) {
+    let row = text.offset_to_point(offset).row;
+    (
+        row,
+        text.line_start_offset(row),
+        text.slice_line(row).to_string(),
+    )
+}
+
+/// [`line_at`] for a selection on one line; a selection over several lines is gpui-kit's to indent.
+fn single_line(text: &Rope, selection: &Range<usize>) -> Option<(usize, usize, String)> {
+    let line = line_at(text, selection.start);
+    (text.offset_to_point(selection.end).row == line.0).then_some(line)
+}
+
+/// The indent unit of the list around `row`, read from its lines up to a blank line each way.
+fn list_unit(text: &Rope, row: usize) -> String {
+    let line = |r: usize| text.slice_line(r).to_string();
+    let filled = |l: &String| !l.trim().is_empty();
+    let mut lines: Vec<String> = (row.saturating_sub(LIST_LOOKAROUND)..row)
+        .rev()
+        .map(line)
+        .take_while(filled)
+        .collect();
+    lines.reverse();
+    let end = text.lines_len().min(row + LIST_LOOKAROUND);
+    lines.extend((row..end).map(line).take_while(filled));
+    markdown::indent_unit(lines.iter().map(String::as_str))
+}
+
 /// leaf's one button look (the design's Open folder button): `side` fill, `line` border, radius 6.
 fn leaf_button(id: &'static str, label: &'static str, cx: &App) -> Button {
     let p = theme::colors(cx);
@@ -946,7 +1063,17 @@ impl Render for EditorTabs {
                 if tab.is_markdown() {
                     // The paper sheet: a reading-width page on the desk, keeping 20 px of desk on each
                     // side when the pane is narrower than the page.
-                    body.flex()
+                    body.key_context(MARKDOWN)
+                        .on_action(cx.listener(Self::newline))
+                        .on_action(cx.listener(Self::indent_item))
+                        .on_action(cx.listener(Self::outdent_item))
+                        .on_action(cx.listener(|this, _: &ToggleBold, window, cx| {
+                            this.toggle_emphasis(Emphasis::Bold, window, cx)
+                        }))
+                        .on_action(cx.listener(|this, _: &ToggleItalic, window, cx| {
+                            this.toggle_emphasis(Emphasis::Italic, window, cx)
+                        }))
+                        .flex()
                         .justify_center()
                         .px(z(20., cx))
                         .bg(c(p.desk))
