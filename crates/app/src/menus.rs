@@ -4,7 +4,7 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::*;
 
 use crate::keymap::{
-    CloseTab, CopyPath, CopyRelativePath, FocusTree, NextTab, OpenFolder, PrevTab, Quit,
+    CloseTab, CopyPath, CopyRelativePath, FocusTree, NewWindow, NextTab, OpenFolder, PrevTab, Quit,
     RevealInFinder, Save, TogglePreview, ZoomIn, ZoomOut, ZoomReset,
 };
 
@@ -22,6 +22,7 @@ pub fn init(cx: &mut App) {
         menu(
             "File",
             vec![
+                MenuItem::action("New Window", NewWindow),
                 MenuItem::action("Open Folder…", OpenFolder),
                 MenuItem::separator(),
                 MenuItem::action("Save", Save),
@@ -59,5 +60,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Actual Size", ZoomReset),
             ],
         ),
+        // macOS lists the open windows in the menu named Window.
+        menu("Window", vec![]),
     ]);
 }

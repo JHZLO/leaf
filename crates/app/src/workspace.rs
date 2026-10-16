@@ -1,4 +1,5 @@
 //! One window: the tree, the tabs, the title and status bars, and the actions that span them.
+//! Also which window a folder opens in, and the session all the windows share.
 
 use std::{
     path::{Path, PathBuf},
@@ -13,9 +14,9 @@ use crate::{
     empty_state,
     finder::{self, Finder, FinderEvent},
     keymap::{
-        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, Open, OpenFolder,
-        PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview,
-        ToggleSearch, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewWindow, NextTab, Open,
+        OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder,
+        TogglePreview, ToggleSearch, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{FileEvent, PanelEvent, ProjectPanel},
     search_panel::{self, SearchEvent, SearchPanel},
@@ -28,7 +29,6 @@ use crate::{
 enum AfterDiscard {
     Quit,
     CloseWindow,
-    OpenFolder(PathBuf),
 }
 
 /// What floats over the window: the file finder or the folder search, one at a time.
@@ -55,26 +55,175 @@ pub struct Workspace {
     _watcher: Option<watch::Watcher>,
     /// Writes the session a moment after the last change.
     save_task: Task<()>,
-    /// Folders opened before, newest first; the empty window offers them.
-    recent: Vec<PathBuf>,
+    /// Which of the recent folders the empty window has selected.
     recent_selected: usize,
+    window: AnyWindowHandle,
     /// The active file the tree last moved to, so it follows only real switches.
     followed: Option<PathBuf>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
-/// Opens the window. `arg` is a folder to open, or a file to open inside its folder.
-pub fn open(arg: Option<PathBuf>, cx: &mut App) {
+/// Every open window's workspace and what it last saved, plus the recent folders, which all
+/// windows share. The session file is written from here, so no window reads another while saving.
+#[derive(Default)]
+struct Windows {
+    open: Vec<OpenWindow>,
+    /// Folders opened before, newest first; the empty window offers them.
+    recent: Vec<PathBuf>,
+}
+
+impl Global for Windows {}
+
+struct OpenWindow {
+    handle: AnyWindowHandle,
+    workspace: WeakEntity<Workspace>,
+    saved: Option<session::WindowState>,
+}
+
+/// Set by the offscreen UI checks: windows leaf opens itself then stay off screen and never take focus.
+pub struct OffscreenWindows;
+
+impl Global for OffscreenWindows {}
+
+/// How far each new window sits from the last one.
+const CASCADE: f32 = 25.;
+
+/// Reads the shared part of the session: the zoom and the recent folders.
+pub fn init(cx: &mut App) {
     let saved = session::load(&session::default_path());
     theme::set_zoom(if saved.zoom == 0 { 100 } else { saved.zoom }, cx);
-    let arg = arg.and_then(|p| std::fs::canonicalize(p).ok());
-    let (root, file) = match arg {
-        Some(path) if path.is_dir() => (Some(path), None),
-        Some(path) => (path.parent().map(Path::to_path_buf), Some(path)),
-        None => (saved.root.filter(|r| r.is_dir()), None),
+    cx.set_global(Windows {
+        open: Vec::new(),
+        recent: saved.recent,
+    });
+}
+
+/// The first windows: one for each of `paths` (folders, or files to open in their folder), or else
+/// the windows open when leaf last quit, or else an empty one.
+pub fn open_at_start(paths: Vec<PathBuf>, cx: &mut App) {
+    let mut opened = false;
+    for path in paths {
+        opened |= open_path(&path, cx).is_some();
+    }
+    if !opened {
+        for root in session::load(&session::default_path())
+            .windows
+            .into_iter()
+            .filter_map(|w| w.root)
+            .filter(|root| root.is_dir())
+        {
+            open_path(&root, cx);
+        }
+    }
+    if live_windows(cx).is_empty() {
+        open_window(None, None, cx);
+    }
+}
+
+/// Opens a folder, or a file inside its folder, as leaf does for a path from the command line or
+/// Finder: in the window that already has it, else in an empty window, else in a new one.
+/// Returns the window it used.
+pub fn open_path(path: &Path, cx: &mut App) -> Option<AnyWindowHandle> {
+    let path = std::fs::canonicalize(path).ok()?;
+    let (root, file) = if path.is_dir() {
+        (path, None)
+    } else {
+        (path.parent()?.to_path_buf(), Some(path))
     };
-    let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+    let empty = live_windows(cx)
+        .into_iter()
+        .find(|(_, workspace)| workspace.read(cx).panel.is_none())
+        .map(|(handle, _)| handle);
+    open_in(root, file, empty, cx)
+}
+
+/// Opens `root` chosen in `from` (Cmd+O, a recent folder): an empty window takes it itself, a
+/// window with a folder leaves its own and opens a new one. Returns the window it used.
+pub fn open_folder_from(
+    root: PathBuf,
+    from: AnyWindowHandle,
+    cx: &mut App,
+) -> Option<AnyWindowHandle> {
+    let empty = live_windows(cx)
+        .into_iter()
+        .find(|(handle, workspace)| *handle == from && workspace.read(cx).panel.is_none())
+        .map(|(handle, _)| handle);
+    open_in(root, None, empty, cx)
+}
+
+/// Opens an empty window (File > New Window).
+pub fn open_empty_window(cx: &mut App) -> Option<AnyWindowHandle> {
+    open_window(None, None, cx)
+}
+
+/// A window already showing `root` (for a file, the window whose folder holds it) comes forward;
+/// otherwise `empty` takes the folder, or a new window opens.
+fn open_in(
+    root: PathBuf,
+    file: Option<PathBuf>,
+    empty: Option<AnyWindowHandle>,
+    cx: &mut App,
+) -> Option<AnyWindowHandle> {
+    let showing = live_windows(cx)
+        .into_iter()
+        .filter_map(|(handle, workspace)| {
+            let open = workspace.read(cx).root(cx)?;
+            let holds = match &file {
+                Some(file) => file.starts_with(&open),
+                None => open == root,
+            };
+            // The deepest folder wins when one open folder sits inside another.
+            holds.then(|| (open.components().count(), handle, workspace))
+        })
+        .max_by_key(|(depth, ..)| *depth)
+        .map(|(_, handle, workspace)| (handle, workspace, false));
+    let target = showing.or_else(|| {
+        let handle = empty?;
+        let workspace = live_windows(cx).into_iter().find(|(h, _)| *h == handle)?.1;
+        Some((handle, workspace, true))
+    });
+    let Some((handle, workspace, take_root)) = target else {
+        return open_window(Some(root), file, cx);
+    };
+    let background =
+        cx.has_global::<OffscreenWindows>() || std::env::var_os("LEAF_BACKGROUND").is_some();
+    handle
+        .update(cx, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                if take_root {
+                    workspace.set_root(root, window, cx);
+                }
+                if let Some(file) = file {
+                    workspace.open_file(&file, window, cx);
+                }
+            });
+            if !background {
+                window.activate_window();
+            }
+        })
+        .ok()?;
+    Some(handle)
+}
+
+/// Opens a new window on `root` (or an empty one) with `file` open in it.
+fn open_window(
+    root: Option<PathBuf>,
+    file: Option<PathBuf>,
+    cx: &mut App,
+) -> Option<AnyWindowHandle> {
+    let offscreen = cx.has_global::<OffscreenWindows>();
+    let first_size = size(px(1280.), px(800.));
+    let bounds = if offscreen {
+        Bounds::new(point(px(-10000.), px(-10000.)), first_size)
+    } else {
+        // Each new window steps down from the last one so none hides another exactly.
+        let last = live_windows(cx).last().map(|(handle, _)| *handle);
+        match last.and_then(|h| h.update(cx, |_, window, _| window.bounds()).ok()) {
+            Some(last) => Bounds::new(last.origin + point(px(CASCADE), px(CASCADE)), last.size),
+            None => Bounds::centered(None, first_size, cx),
+        }
+    };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -83,6 +232,7 @@ pub fn open(arg: Option<PathBuf>, cx: &mut App) {
             traffic_light_position: Some(title_bar::traffic_lights()),
         }),
         window_min_size: Some(size(px(640.), px(400.))),
+        focus: !offscreen,
         ..Default::default()
     };
     let opened = gpui_kit::open_window(options, cx, move |window, cx| {
@@ -91,20 +241,61 @@ pub fn open(arg: Option<PathBuf>, cx: &mut App) {
             if let Some(root) = root {
                 workspace.set_root(root, window, cx);
             }
-            if let (Some(file), Some(panel)) = (file, workspace.panel.clone()) {
-                let root = panel.read(cx).root().to_path_buf();
-                if let Ok(rel) = file.strip_prefix(&root) {
-                    let rel = rel.to_path_buf();
-                    workspace
-                        .tabs
-                        .update(cx, |tabs, cx| tabs.open(&rel, false, window, cx));
-                }
+            if let Some(file) = file {
+                workspace.open_file(&file, window, cx);
             }
             workspace
         })
     });
-    if let Err(err) = opened {
-        eprintln!("leaf: could not open a window: {err}");
+    match opened {
+        Ok((handle, _)) => Some(handle),
+        Err(err) => {
+            eprintln!("leaf: could not open a window: {err}");
+            None
+        }
+    }
+}
+
+/// The windows still open, oldest first.
+fn live_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
+    let open = cx.windows();
+    cx.try_global::<Windows>()
+        .map(|windows| {
+            windows
+                .open
+                .iter()
+                .filter(|w| open.contains(&w.handle))
+                .filter_map(|w| Some((w.handle, w.workspace.upgrade()?)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A window closed while others stay open drops out of the session. The app does not call this
+/// for the last one, so leaf quits with that window still in the session and reopens it next time.
+pub fn window_closed(id: WindowId, cx: &mut App) {
+    cx.default_global::<Windows>()
+        .open
+        .retain(|w| w.handle.window_id() != id);
+    write_session(cx);
+}
+
+fn write_session(cx: &App) {
+    let Some(windows) = cx.try_global::<Windows>() else {
+        return;
+    };
+    let saved = session::Session {
+        windows: windows
+            .open
+            .iter()
+            .filter_map(|w| w.saved.clone())
+            .filter(|w| w.root.is_some())
+            .collect(),
+        zoom: cx.try_global::<theme::Zoom>().map_or(100, |z| z.0),
+        recent: windows.recent.clone(),
+    };
+    if let Err(err) = session::save(&session::default_path(), &saved) {
+        eprintln!("leaf: session not saved: {err}");
     }
 }
 
@@ -132,6 +323,13 @@ impl Workspace {
         // With no folder open, the window itself takes the keys (recent folders).
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
+        let handle = window.window_handle();
+        let workspace = cx.entity().downgrade();
+        cx.default_global::<Windows>().open.push(OpenWindow {
+            handle,
+            workspace,
+            saved: None,
+        });
         Self {
             panel: None,
             tabs,
@@ -141,8 +339,8 @@ impl Workspace {
             copy_seq: 0,
             _watcher: None,
             save_task: Task::ready(()),
-            recent: session::load(&session::default_path()).recent,
             recent_selected: 0,
+            window: handle,
             followed: None,
             focus_handle,
             _subscriptions: subscriptions,
@@ -150,8 +348,10 @@ impl Workspace {
     }
 
     /// Recent folders that still exist, as the empty window lists them.
-    fn recent_shown(&self) -> Vec<PathBuf> {
-        self.recent
+    fn recent_shown(&self, cx: &App) -> Vec<PathBuf> {
+        cx.try_global::<Windows>()
+            .map(|w| w.recent.as_slice())
+            .unwrap_or_default()
             .iter()
             .filter(|r| r.is_dir())
             .take(empty_state::SHOWN_RECENT)
@@ -159,14 +359,18 @@ impl Workspace {
             .collect()
     }
 
-    fn open_recent(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(root) = self.recent_shown().get(index).cloned() {
-            self.set_root(root, window, cx);
+    fn open_recent(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(root) = self.recent_shown(cx).get(index).cloned() {
+            let from = self.window;
+            // After this update: choosing the window reads every workspace, this one included.
+            cx.defer(move |cx| {
+                open_folder_from(root, from, cx);
+            });
         }
     }
 
     fn move_recent(&mut self, step: isize, cx: &mut Context<Self>) {
-        let count = self.recent_shown().len();
+        let count = self.recent_shown(cx).len();
         if count > 0 {
             self.recent_selected =
                 (self.recent_selected as isize + step).clamp(0, count as isize - 1) as usize;
@@ -217,12 +421,18 @@ impl Workspace {
             .push(cx.observe(&panel, |this, _, cx| this.schedule_save(cx)));
         panel.read(cx).focus_handle(cx).focus(window, cx);
         self.panel = Some(panel.clone());
-        session::remember(&mut self.recent, root.clone());
+        session::remember(&mut cx.default_global::<Windows>().recent, root.clone());
         self.recent_selected = 0;
+        if let Some(name) = root.file_name() {
+            // What the Window menu and the Dock list this window as.
+            window.set_window_title(&name.to_string_lossy());
+        }
         self.watch(&root, window, cx);
-        // The same folder as last time comes back as it was left.
-        let saved = session::load(&session::default_path());
-        if saved.root.as_deref() == Some(root.as_path()) {
+        // A folder that had a window when leaf last saved comes back as it was left.
+        if let Some(saved) = session::load(&session::default_path())
+            .window(&root)
+            .cloned()
+        {
             panel.update(cx, |panel, cx| {
                 panel.restore(&saved.expanded, saved.selected.clone(), cx);
                 panel.width = saved.tree_width.unwrap_or(panel.width);
@@ -236,6 +446,18 @@ impl Workspace {
         }
         self.schedule_save(cx);
         cx.notify();
+    }
+
+    /// Opens `file`, an absolute path inside the open folder, in a tab.
+    fn open_file(&mut self, file: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.root(cx) else {
+            return;
+        };
+        if let Ok(rel) = file.strip_prefix(&root) {
+            let rel = rel.to_path_buf();
+            self.tabs
+                .update(cx, |tabs, cx| tabs.open(&rel, false, window, cx));
+        }
     }
 
     /// Watches the folder; each batch of outside changes refreshes the tree and the open files.
@@ -272,7 +494,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let unsaved = self.tabs.read(cx).tabs_unsaved();
+        let unsaved = match then {
+            AfterDiscard::CloseWindow => self.tabs.read(cx).tabs_unsaved(),
+            // Quitting closes every window, so it counts them all.
+            AfterDiscard::Quit => {
+                let others: usize = live_windows(cx)
+                    .iter()
+                    .filter(|(handle, _)| *handle != self.window)
+                    .map(|(_, workspace)| workspace.read(cx).tabs.read(cx).tabs_unsaved())
+                    .sum();
+                self.tabs.read(cx).tabs_unsaved() + others
+            }
+        };
         if unsaved == 0 {
             return true;
         }
@@ -292,22 +525,18 @@ impl Workspace {
             if answer.await != Ok(0) {
                 return;
             }
-            let _ = this.update_in(cx, |this, window, cx| match then {
+            let _ = this.update_in(cx, |_, window, cx| match then {
                 AfterDiscard::Quit => cx.quit(),
                 AfterDiscard::CloseWindow => window.remove_window(),
-                AfterDiscard::OpenFolder(root) => this.set_root(root, window, cx),
             });
         })
         .detach();
         false
     }
 
-    /// What reopens next time: the folder, the tree, the tabs, the zoom.
-    fn snapshot(&self, cx: &App) -> session::Session {
-        let mut saved = session::Session {
-            zoom: cx.try_global::<theme::Zoom>().map_or(100, |z| z.0),
-            ..Default::default()
-        };
+    /// What reopens next time: the folder, the tree, the tabs.
+    fn snapshot(&self, cx: &App) -> session::WindowState {
+        let mut saved = session::WindowState::default();
         if let Some(panel) = &self.panel {
             let panel = panel.read(cx);
             saved.root = Some(panel.root().to_path_buf());
@@ -318,14 +547,21 @@ impl Workspace {
         let tabs = self.tabs.read(cx);
         (saved.tabs, saved.active_tab) = tabs.session_tabs(cx);
         saved.preview = tabs.preview_open();
-        saved.recent = self.recent.clone();
         saved
     }
 
-    fn save_session(&self, cx: &App) {
-        if let Err(err) = session::save(&session::default_path(), &self.snapshot(cx)) {
-            eprintln!("leaf: session not saved: {err}");
+    /// Records this window's state and writes the session with every window in it.
+    fn save_session(&self, cx: &mut App) {
+        let snapshot = self.snapshot(cx);
+        if let Some(entry) = cx
+            .default_global::<Windows>()
+            .open
+            .iter_mut()
+            .find(|w| w.handle == self.window)
+        {
+            entry.saved = Some(snapshot);
         }
+        write_session(cx);
     }
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
@@ -378,25 +614,26 @@ impl Workspace {
             .is_some_and(|p| p.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
 
-    fn open_folder(&mut self, _: &OpenFolder, window: &mut Window, cx: &mut Context<Self>) {
+    /// Nothing open here is replaced, so there is nothing to ask before opening.
+    fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
             prompt: Some("Open".into()),
         });
-        cx.spawn_in(window, async move |this, cx| {
+        let from = self.window;
+        cx.spawn(async move |_, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
                 return;
             };
             let Some(root) = paths.into_iter().next() else {
                 return;
             };
-            let _ = this.update_in(cx, |this, window, cx| {
-                if this.confirm_discard(AfterDiscard::OpenFolder(root.clone()), window, cx) {
-                    this.set_root(root, window, cx);
-                }
-            });
+            let Ok(root) = std::fs::canonicalize(root) else {
+                return;
+            };
+            cx.update(|cx| open_folder_from(root, from, cx));
         })
         .detach();
     }
@@ -681,6 +918,11 @@ impl Render for Workspace {
             })
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::open_folder))
+            .on_action(cx.listener(|_, _: &NewWindow, _, cx| {
+                cx.defer(|cx| {
+                    open_empty_window(cx);
+                })
+            }))
             .on_action(cx.listener(Self::focus_tree))
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::toggle_finder))
@@ -692,8 +934,8 @@ impl Render for Workspace {
             .when(self.panel.is_none(), |el| {
                 el.on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_recent(-1, cx)))
                     .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_recent(1, cx)))
-                    .on_action(cx.listener(|this, _: &Open, window, cx| {
-                        this.open_recent(this.recent_selected, window, cx)
+                    .on_action(cx.listener(|this, _: &Open, _, cx| {
+                        this.open_recent(this.recent_selected, cx)
                     }))
             })
             .on_action(cx.listener(Self::close_tab))
@@ -739,11 +981,10 @@ impl Render for Workspace {
                         None => {
                             let this = cx.entity().downgrade();
                             el.child(empty_state::render(
-                                &self.recent_shown(),
+                                &self.recent_shown(cx),
                                 self.recent_selected,
-                                move |index, window, cx| {
-                                    let _ = this
-                                        .update(cx, |this, cx| this.open_recent(index, window, cx));
+                                move |index, _, cx| {
+                                    let _ = this.update(cx, |this, cx| this.open_recent(index, cx));
                                 },
                                 cx,
                             ))

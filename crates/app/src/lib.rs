@@ -34,7 +34,8 @@ pub fn settings(cx: &App) -> &Settings {
     &cx.global::<UserSettings>().settings
 }
 
-/// Registers leaf's settings, theme and keys; what both the app and the UI tests start from.
+/// Registers leaf's settings, theme, keys and the shared session; what both the app and the UI
+/// tests start from.
 pub fn init(cx: &mut App) {
     let (settings, error) = settings::load(&settings::default_path());
     let overrides = settings.keymap.clone();
@@ -47,28 +48,31 @@ pub fn init(cx: &mut App) {
         let state = cx.global_mut::<UserSettings>();
         state.error.get_or_insert(problem);
     }
+    workspace::init(cx);
 }
 
 /// Runs the app. `arg` is a folder to open, or a file to open inside its folder.
 pub fn run(arg: Option<PathBuf>) {
-    // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
     // A file of defaults the first time, so the settings are easy to find and edit.
     if let Err(err) = settings::write_default_if_missing(&settings::default_path()) {
         eprintln!("leaf: no settings file written: {err}");
     }
+    // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             init(cx);
             menus::init(cx);
             cx.on_action(|_: &keymap::Quit, cx| cx.quit());
-            cx.on_window_closed(|cx, _| {
+            cx.on_window_closed(|cx, id| {
                 if cx.windows().is_empty() {
                     cx.quit();
+                } else {
+                    workspace::window_closed(id, cx);
                 }
             })
             .detach();
-            workspace::open(arg, cx);
+            workspace::open_at_start(arg.into_iter().collect(), cx);
             // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
             if std::env::var_os("LEAF_BACKGROUND").is_none() {
                 cx.activate(true);

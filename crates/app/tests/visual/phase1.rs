@@ -80,7 +80,12 @@ pub fn run(check: &mut Check) {
     );
 
     // The first window's folder is saved as recent; the empty window offers it and Enter opens it.
+    // While a window shows that folder, Enter would bring that window forward instead, so it closes.
     check.cx.advance_clock(Duration::from_secs(2));
+    check
+        .cx
+        .update_window(window, |_, window, _| window.remove_window())
+        .expect("window");
     let empty = check.open(None);
     check.shot(empty, "6-empty-dark");
     check.keys(empty, "enter");

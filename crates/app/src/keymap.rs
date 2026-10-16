@@ -26,6 +26,7 @@ actions!(
         ToggleFinder,
         RevealInFinder,
         ToggleSearch,
+        NewWindow,
     ]
 );
 
@@ -105,6 +106,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-o", OpenFolder, ws),
+        KeyBinding::new("cmd-shift-n", NewWindow, ws),
         KeyBinding::new("cmd-1", FocusTree, ws),
         KeyBinding::new("cmd-shift-c", CopyPath, ws),
         KeyBinding::new("cmd-alt-shift-c", CopyRelativePath, ws),
