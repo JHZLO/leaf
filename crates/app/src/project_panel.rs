@@ -44,6 +44,11 @@ fn guide_x(level: usize) -> f32 {
     row_padding(level) + CHEVRON_SLOT / 2.
 }
 
+/// The rows that fit whole in a list `list_height` tall, at least one so a page always moves.
+fn rows_per_page(list_height: f32, row_height: f32) -> usize {
+    ((list_height / row_height).floor() as usize).max(1)
+}
+
 /// `path` with the home folder written as `~`, the way a shell prompt shows it.
 fn tilde(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
@@ -121,8 +126,7 @@ impl ProjectPanel {
     }
 
     fn apply(&mut self, key: NavKey, cx: &mut Context<Self>) {
-        let rows = self.tree.rows();
-        let outcome = nav::navigate(&rows, self.tree.selected(), key);
+        let outcome = nav::navigate(&self.tree.rows(), self.tree.selected(), key);
         if let Some(dir) = outcome.expand
             && self.tree.expand(&dir)
         {
@@ -133,21 +137,33 @@ impl ProjectPanel {
         }
         if let Some(path) = outcome.select {
             self.tree.select(Some(path));
-            if let Some(index) = self
-                .tree
-                .rows()
-                .iter()
-                .position(|r| Some(r.path.as_path()) == self.tree.selected())
-            {
-                self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
-            }
         }
+        self.reveal_selection();
         cx.notify();
     }
 
-    fn page(&self, cx: &App) -> usize {
-        let _ = cx;
-        20
+    /// Scrolls just enough to show the selected row.
+    fn reveal_selection(&self) {
+        let selected = self.tree.selected();
+        if let Some(index) = self
+            .tree
+            .rows()
+            .iter()
+            .position(|r| Some(r.path.as_path()) == selected)
+        {
+            self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// How many rows PageUp and PageDown move: as many as the list showed in the last frame.
+    fn page_rows(&self, cx: &App) -> usize {
+        let list_height = self
+            .scroll
+            .0
+            .borrow()
+            .last_item_size
+            .map_or(0., |size| size.item.height.as_f32());
+        rows_per_page(list_height, z(size::TREE_ROW, cx).as_f32())
     }
 
     fn open_selected(&mut self, leaf_through: bool, cx: &mut Context<Self>) {
@@ -165,6 +181,7 @@ impl ProjectPanel {
             } else if self.tree.expand(&selected) {
                 self.load_dir(selected, cx);
             }
+            self.reveal_selection();
             cx.notify();
         } else {
             cx.emit(PanelEvent::Open {
@@ -185,6 +202,7 @@ impl ProjectPanel {
         if open {
             self.open_selected(false, cx);
         }
+        self.reveal_selection();
         cx.notify();
     }
 
@@ -286,7 +304,6 @@ impl Render for ProjectPanel {
             .parent()
             .map(|parent| tilde(parent, home.as_deref()))
             .unwrap_or_default();
-        let page = self.page(cx);
         let count = rows.len();
         let selected_row = selected
             .as_ref()
@@ -307,14 +324,14 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &Collapse, _, cx| this.apply(NavKey::Left, cx)))
             .on_action(cx.listener(|this, _: &SelectFirst, _, cx| this.apply(NavKey::First, cx)))
             .on_action(cx.listener(|this, _: &SelectLast, _, cx| this.apply(NavKey::Last, cx)))
-            .on_action(
-                cx.listener(move |this, _: &PageUp, _, cx| this.apply(NavKey::PageUp(page), cx)),
-            )
-            .on_action(
-                cx.listener(move |this, _: &PageDown, _, cx| {
-                    this.apply(NavKey::PageDown(page), cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                let page = this.page_rows(cx);
+                this.apply(NavKey::PageUp(page), cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+                let page = this.page_rows(cx);
+                this.apply(NavKey::PageDown(page), cx)
+            }))
             .on_action(cx.listener(|this, _: &Open, _, cx| this.open_selected(false, cx)))
             .on_action(cx.listener(|this, _: &LeafThrough, _, cx| this.open_selected(true, cx)))
             .w(z(size::TREE_WIDTH, cx))
@@ -449,7 +466,7 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
 mod tests {
     use std::path::Path;
 
-    use super::{CHEVRON_SLOT, guide_x, row_padding, tilde};
+    use super::{CHEVRON_SLOT, guide_x, row_padding, rows_per_page, tilde};
 
     #[test]
     fn guides_follow_the_design_formula() {
@@ -478,5 +495,15 @@ mod tests {
         assert_eq!(tilde(Path::new("/Users/younger"), home), "/Users/younger");
         assert_eq!(tilde(Path::new("/opt/work"), home), "/opt/work");
         assert_eq!(tilde(Path::new("/opt/work"), None), "/opt/work");
+    }
+
+    #[test]
+    fn a_page_is_the_rows_that_fit_whole() {
+        assert_eq!(rows_per_page(220., 22.), 10);
+        assert_eq!(rows_per_page(230., 22.), 10);
+        // Zoom scales both, so the count stays.
+        assert_eq!(rows_per_page(220. * 1.5, 22. * 1.5), 10);
+        // Before the first layout the list has no height; a page is still one row.
+        assert_eq!(rows_per_page(0., 22.), 1);
     }
 }
