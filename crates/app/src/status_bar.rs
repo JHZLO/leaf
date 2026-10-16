@@ -8,6 +8,8 @@ use crate::theme::{self, c, size, z};
 
 /// How long the copied state stays before it fades back.
 pub const COPIED_FOR: Duration = Duration::from_millis(1500);
+/// The fade back: the only motion in leaf (design doc, interaction rules).
+pub const FADE: Duration = Duration::from_millis(200);
 
 /// What was just copied, shown on the stem until [`COPIED_FOR`] has passed.
 #[derive(Clone, Debug)]
@@ -16,6 +18,8 @@ pub struct Copied {
     /// The format, as shown after the stem (`Copied relative path and line`).
     pub label: &'static str,
     pub at: Instant,
+    /// Restarts the fade when something is copied again.
+    pub seq: u64,
 }
 
 pub struct Status<'a> {
@@ -29,21 +33,50 @@ pub struct Status<'a> {
 
 pub fn render(status: Status<'_>, cx: &App) -> impl IntoElement {
     let p = theme::colors(cx);
-    let copied = status
+    let elapsed = status.copied.map(|copied| copied.at.elapsed());
+    let holding = status
         .copied
-        .filter(|copied| copied.at.elapsed() < COPIED_FOR);
-    let stem_text = copied
+        .filter(|_| elapsed.is_some_and(|e| e < COPIED_FOR));
+    let fading = status
+        .copied
+        .filter(|_| elapsed.is_some_and(|e| e >= COPIED_FOR && e < COPIED_FOR + FADE));
+    // While holding, the stem shows exactly what was copied; the fade returns to the plain stem.
+    let stem_text = holding
         .map(|copied| copied.text.clone())
         .or_else(|| status.stem.map(str::to_string))
         .unwrap_or_default();
-    let stem = div()
+    let base = div()
         .px_2()
         .rounded(px(4.))
         .font_family("Menlo")
         .text_size(z(11.5, cx))
-        .text_color(c(if copied.is_some() { p.sel_ink } else { p.ink }))
-        .when(copied.is_some(), |el| el.bg(c(p.sel_bg)))
+        .text_color(c(if holding.is_some() { p.sel_ink } else { p.ink }))
+        .when(holding.is_some(), |el| el.bg(c(p.sel_bg)))
         .child(stem_text);
+    let sel_bg = c(p.sel_bg);
+    let stem = match fading {
+        Some(copied) => base
+            .with_animation(
+                ElementId::NamedInteger("stem-fade".into(), copied.seq),
+                Animation::new(FADE),
+                move |el, delta| el.bg(sel_bg.opacity(1. - delta)),
+            )
+            .into_any_element(),
+        None => base.into_any_element(),
+    };
+    let label = holding.or(fading).map(|copied| {
+        let label = div().text_color(c(p.accent_text)).child(copied.label);
+        match fading {
+            Some(_) => label
+                .with_animation(
+                    ElementId::NamedInteger("label-fade".into(), copied.seq),
+                    Animation::new(FADE),
+                    |el, delta| el.opacity(1. - delta),
+                )
+                .into_any_element(),
+            None => label.into_any_element(),
+        }
+    });
     div()
         .h(z(size::STATUS_BAR, cx))
         .flex_none()
@@ -58,9 +91,12 @@ pub fn render(status: Status<'_>, cx: &App) -> impl IntoElement {
         .text_size(z(12., cx))
         .text_color(c(p.sub))
         .child(
-            div().flex().items_center().gap_2p5().child(stem).children(
-                copied.map(|copied| div().text_color(c(p.accent_text)).child(copied.label)),
-            ),
+            div()
+                .flex()
+                .items_center()
+                .gap_2p5()
+                .child(stem)
+                .children(label),
         )
         .child(
             div()

@@ -15,7 +15,7 @@ use crate::{
         Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{PanelEvent, ProjectPanel},
-    status_bar::{self, COPIED_FOR, Copied, Status},
+    status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     theme::{self, ZOOM_STEPS, c},
     title_bar,
 };
@@ -25,6 +25,7 @@ pub struct Workspace {
     tabs: Entity<EditorTabs>,
     tree_visible: bool,
     copied: Option<Copied>,
+    copy_seq: u64,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -90,6 +91,7 @@ impl Workspace {
             tabs,
             tree_visible: true,
             copied: None,
+            copy_seq: 0,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -187,16 +189,21 @@ impl Workspace {
 
     fn copy(&mut self, text: String, label: &'static str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        self.copy_seq += 1;
         self.copied = Some(Copied {
             text,
             label,
             at: Instant::now(),
+            seq: self.copy_seq,
         });
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(COPIED_FOR).await;
-            let _ = this.update(cx, |_, cx| cx.notify());
-        })
-        .detach();
+        // Redraw when the hold ends (the fade starts) and when the fade ends.
+        for wait in [COPIED_FOR, COPIED_FOR + FADE] {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(wait).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         cx.notify();
     }
 
