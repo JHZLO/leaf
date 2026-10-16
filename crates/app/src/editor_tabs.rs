@@ -1,9 +1,13 @@
 //! Open files as tabs, each over one gpui-kit editor: the leaf-through tab, the paper sheet, saving.
 
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Sizable as _,
+    button::Button,
     input::{Editor, EditorState, InputEvent, RopeExt as _},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -26,6 +30,10 @@ pub struct Tab {
     pub bom: bool,
     pub stamp: FileStamp,
     pub language: SharedString,
+    /// The file is gone from disk; saving writes it again.
+    deleted: bool,
+    /// The file changed on disk under unsaved edits: its stamp there, until the user picks a side.
+    conflict: Option<FileStamp>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -246,6 +254,8 @@ impl EditorTabs {
             bom: file.bom,
             stamp: file.stamp,
             language,
+            deleted: false,
+            conflict: None,
             _subscriptions: subscriptions,
         }
     }
@@ -319,7 +329,8 @@ impl EditorTabs {
         cx.notify();
     }
 
-    /// Files changed on disk outside leaf.
+    /// Files changed on disk outside leaf (relative to the open folder, as the watcher reports them).
+    /// A clean tab reloads, a tab with edits shows a banner, a deleted file marks its tab.
     #[expect(dead_code, reason = "called by the folder watcher (Phase 1)")]
     pub fn files_changed(
         &mut self,
@@ -327,7 +338,189 @@ impl EditorTabs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = (files, window, cx);
+        // A folder that was renamed or removed counts for every file under it.
+        let checks: Vec<_> = self
+            .tabs
+            .iter()
+            .filter(|t| files.iter().any(|f| t.path.starts_with(f)))
+            .map(|t| {
+                (
+                    t.editor.entity_id(),
+                    self.root.join(&t.path),
+                    t.stamp,
+                    t.dirty,
+                )
+            })
+            .collect();
+        if checks.is_empty() {
+            return;
+        }
+        let task = cx.background_executor().spawn(async move {
+            checks
+                .into_iter()
+                .map(|(id, path, stamp, dirty)| (id, check_disk(&path, stamp, dirty)))
+                .collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let states = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                for (id, state) in states {
+                    this.apply_disk_state(id, state, window, cx);
+                }
+                cx.emit(TabsChanged);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn index_of(&self, id: EntityId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.editor.entity_id() == id)
+    }
+
+    fn apply_disk_state(
+        &mut self,
+        id: EntityId,
+        state: DiskState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        // The tab may have saved or reloaded while the disk was checked.
+        let seen = match &state {
+            DiskState::Changed(stamp) => Some(*stamp),
+            DiskState::Reread(Ok(file)) => Some(file.stamp),
+            _ => None,
+        };
+        if seen == Some(tab.stamp) {
+            tab.deleted = false;
+            return;
+        }
+        match state {
+            DiskState::Same => tab.deleted = false,
+            DiskState::Gone => {
+                tab.deleted = true;
+                tab.conflict = None;
+            }
+            DiskState::Changed(stamp) if tab.dirty => {
+                tab.deleted = false;
+                tab.conflict = Some(stamp);
+            }
+            DiskState::Changed(_) => self.reload_from_disk(id, window, cx),
+            DiskState::Reread(Ok(file)) if tab.dirty => {
+                tab.deleted = false;
+                tab.conflict = Some(file.stamp);
+            }
+            DiskState::Reread(Ok(file)) => self.reload(index, file, window, cx),
+            DiskState::Reread(Err(err)) => {
+                self.error = Some(format!("{}: {err}", tab.path.display()));
+            }
+        }
+    }
+
+    /// Replaces the tab's text with `file`, keeping the cursor where it was (on the last line if the file got shorter).
+    fn reload(
+        &mut self,
+        index: usize,
+        file: TextFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &mut self.tabs[index];
+        tab.editor.update(cx, |state, cx| {
+            let mut cursor = state.cursor_position();
+            state.set_value(file.text, window, cx);
+            let last_line = state.text().lines_len().saturating_sub(1);
+            cursor.line = cursor.line.min(last_line as u32);
+            let offset = state.text().position_to_offset(&cursor);
+            state.set_selected_range(offset..offset, cx);
+        });
+        tab.stamp = file.stamp;
+        tab.line_ending = file.line_ending;
+        tab.bom = file.bom;
+        tab.read_only = file.mixed_line_endings;
+        tab.dirty = false;
+        tab.deleted = false;
+        tab.conflict = None;
+        if self.active == Some(index) {
+            self.refresh_preview(cx);
+        }
+    }
+
+    fn reload_from_disk(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let path = self.root.join(&self.tabs[index].path);
+        let read = cx
+            .background_executor()
+            .spawn(async move { fs::read_text(&path) });
+        cx.spawn_in(window, async move |this, cx| {
+            let file = read.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let Some(index) = this.index_of(id) else {
+                    return;
+                };
+                match file {
+                    Ok(file) => this.reload(index, file, window, cx),
+                    Err(ReadError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+                        this.tabs[index].deleted = true;
+                        this.tabs[index].conflict = None;
+                    }
+                    Err(err) => {
+                        this.error = Some(format!("{}: {err}", this.tabs[index].path.display()));
+                    }
+                }
+                cx.emit(TabsChanged);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Keeps the edits over a file changed on disk; saving then writes them without asking again.
+    fn keep_mine(&mut self, id: EntityId, cx: &mut Context<Self>) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        if let Some(stamp) = tab.conflict.take() {
+            tab.stamp = stamp;
+        }
+        cx.notify();
+    }
+
+    fn render_banner(&self, id: EntityId, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let p = theme::colors(cx);
+        div()
+            .flex_none()
+            .h(z(size::TAB_BAR, cx))
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(z(16., cx))
+            .bg(c(p.side))
+            .border_b_1()
+            .border_color(c(p.line))
+            .text_size(z(12.5, cx))
+            .text_color(c(p.ink))
+            .child("Changed on disk")
+            .child(
+                div()
+                    .flex()
+                    .gap(z(8., cx))
+                    .child(leaf_button("reload", "Reload", cx).on_click(cx.listener(
+                        move |this, _: &ClickEvent, window, cx| {
+                            this.reload_from_disk(id, window, cx)
+                        },
+                    )))
+                    .child(leaf_button("keep-mine", "Keep mine", cx).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.keep_mine(id, cx)),
+                    )),
+            )
     }
 
     pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {
@@ -375,7 +568,7 @@ impl EditorTabs {
                     .px(z(16., cx))
                     .border_r_1()
                     .border_color(c(p.line))
-                    .text_color(c(if active { p.ink } else { p.sub }))
+                    .text_color(c(if active && !tab.deleted { p.ink } else { p.sub }))
                     .map(|el| {
                         if active {
                             el.bg(c(p.paper))
@@ -384,7 +577,7 @@ impl EditorTabs {
                         }
                     })
                     .when(tab.leaf_through, |el| el.italic())
-                    .child(name)
+                    .child(div().when(tab.deleted, |el| el.line_through()).child(name))
                     .when(tab.dirty, |el| {
                         el.child(
                             div()
@@ -428,6 +621,17 @@ impl EditorTabs {
             .text_size(z(12.5, cx))
             .children(tabs)
     }
+}
+
+/// leaf's one button look (the design's Open folder button): `side` fill, `line` border, radius 6.
+fn leaf_button(id: &'static str, label: &'static str, cx: &App) -> Button {
+    let p = theme::colors(cx);
+    Button::new(id)
+        .label(label)
+        .small()
+        .rounded(z(6., cx))
+        .bg(c(p.side))
+        .text_color(c(p.ink))
 }
 
 /// The leaf-through mark: the tab's top right corner folded over, a right triangle of `size`.
@@ -491,6 +695,11 @@ impl Render for EditorTabs {
                 }
             }
         };
+        let banner = self
+            .active_tab()
+            .filter(|t| t.conflict.is_some())
+            .map(|t| t.editor.entity_id())
+            .map(|id| self.render_banner(id, cx));
         div()
             .track_focus(&self.focus_handle)
             .flex_1()
@@ -504,8 +713,73 @@ impl Render for EditorTabs {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(body)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .children(banner)
+                            .child(body),
+                    )
                     .children(self.preview.clone()),
             )
+    }
+}
+
+/// What the disk says about an open tab's file.
+#[derive(Debug)]
+enum DiskState {
+    /// As the tab last read or wrote it.
+    Same,
+    Gone,
+    /// Changed under unsaved edits: the stamp on disk.
+    Changed(FileStamp),
+    /// Changed under a clean tab, and read again.
+    Reread(Result<TextFile, ReadError>),
+}
+
+/// Checks `path` against the stamp its tab knows. Runs on the background executor.
+fn check_disk(path: &Path, known: FileStamp, dirty: bool) -> DiskState {
+    match fs::stamp(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => DiskState::Gone,
+        // Unreadable for now (permissions, a save in progress): the next event checks again.
+        Err(_) => DiskState::Same,
+        Ok(stamp) if stamp == known => DiskState::Same,
+        Ok(stamp) if dirty => DiskState::Changed(stamp),
+        Ok(_) => DiskState::Reread(fs::read_text(path)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's glob export includes a `test` macro that would replace the built-in one.
+    use super::{DiskState, check_disk};
+    use leaf_project::fs;
+
+    #[test]
+    fn check_disk_follows_the_file() {
+        let dir = std::env::temp_dir().join(format!("leaf-check-disk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.md");
+        std::fs::write(&path, "one\n").unwrap();
+        let known = fs::stamp(&path).unwrap();
+
+        assert!(matches!(check_disk(&path, known, false), DiskState::Same));
+
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        assert!(matches!(
+            check_disk(&path, known, true),
+            DiskState::Changed(_)
+        ));
+        match check_disk(&path, known, false) {
+            DiskState::Reread(Ok(file)) => assert_eq!(file.text, "one\ntwo\n"),
+            other => panic!("expected a reread, got {other:?}"),
+        }
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(check_disk(&path, known, false), DiskState::Gone));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
