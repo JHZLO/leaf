@@ -70,6 +70,8 @@ pub struct EditorTabs {
     next_open: u64,
     /// While a session's tabs load, only this one takes the active place, so the order reads finish in does not matter.
     restoring_active: Option<PathBuf>,
+    /// The active tab's cursor lines as last reported, so caret blinks do not count as changes.
+    last_lines: Option<(u32, u32)>,
     preview: Option<Entity<Preview>>,
     focus_handle: FocusHandle,
     /// The last file that could not be opened, and why; shown in the status bar.
@@ -131,6 +133,7 @@ impl EditorTabs {
             pending: Vec::new(),
             next_open: 0,
             restoring_active: None,
+            last_lines: None,
             preview: None,
             focus_handle: cx.focus_handle(),
             error: None,
@@ -293,7 +296,16 @@ impl EditorTabs {
                     this.edited(&editor, cx);
                 }
             }),
-            cx.observe(&editor, |_, _, cx| cx.emit(TabsChanged)),
+            // The editor notifies on every caret blink; pass on only a move to another line.
+            cx.observe(&editor, |this, editor, cx| {
+                if this.active_tab().is_some_and(|t| t.editor == editor) {
+                    let lines = this.active_lines(cx);
+                    if lines != this.last_lines {
+                        this.last_lines = lines;
+                        cx.emit(TabsChanged);
+                    }
+                }
+            }),
         ];
         Tab {
             path,
