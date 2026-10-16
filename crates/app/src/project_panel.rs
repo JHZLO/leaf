@@ -87,6 +87,8 @@ pub struct ProjectPanel {
     search: Option<String>,
     /// Ends the search when focus leaves the tree. Made on first use: `new` has no window.
     focus_out: Option<Subscription>,
+    /// The selection has no row yet (its folder is being read); scroll to it when it arrives.
+    reveal_pending: bool,
 }
 
 /// What the right edge drags; the panel resizes as it moves.
@@ -110,6 +112,7 @@ impl ProjectPanel {
             width: size::TREE_WIDTH,
             search: None,
             focus_out: None,
+            reveal_pending: false,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -156,10 +159,25 @@ impl ProjectPanel {
             let Ok(entries) = listing.await else { return };
             let _ = this.update(cx, |this, cx| {
                 this.tree.set_listing(dir, entries);
+                if this.reveal_pending {
+                    this.reveal_selection();
+                }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Selects `rel` (relative to the open folder) and opens the folders above it, reading the
+    /// ones not read yet, then scrolls to it once its row is there. The workspace calls it to
+    /// follow the active tab.
+    #[expect(dead_code, reason = "the workspace is not calling it yet")]
+    pub fn reveal(&mut self, rel: &Path, cx: &mut Context<Self>) {
+        for dir in self.tree.reveal(rel) {
+            self.load_dir(dir, cx);
+        }
+        self.reveal_selection();
+        cx.notify();
     }
 
     /// Folders changed on disk: re-read the ones on screen, forget the closed ones until they open.
@@ -271,17 +289,19 @@ impl ProjectPanel {
         }
     }
 
-    /// Scrolls just enough to show the selected row.
-    fn reveal_selection(&self) {
+    /// Scrolls just enough to show the selected row. A selection whose folder is still being
+    /// read has no row yet; the scroll waits for the listing.
+    fn reveal_selection(&mut self) {
         let selected = self.tree.selected();
-        if let Some(index) = self
+        let index = self
             .tree
             .rows()
             .iter()
-            .position(|r| Some(r.path.as_path()) == selected)
-        {
+            .position(|r| Some(r.path.as_path()) == selected);
+        if let Some(index) = index {
             self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         }
+        self.reveal_pending = index.is_none() && selected.is_some();
     }
 
     /// How many rows PageUp and PageDown move: as many as the list showed in the last frame.

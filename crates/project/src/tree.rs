@@ -161,6 +161,29 @@ impl ProjectTree {
         self.selected = path;
     }
 
+    /// Selects `path` and opens every folder above it. Returns the folders it opened whose
+    /// listings still need reading, outermost first. A folder that loops stops the walk: the
+    /// tree never shows what is inside it.
+    pub fn reveal(&mut self, path: &Path) -> Vec<PathBuf> {
+        let mut above: Vec<&Path> = path
+            .ancestors()
+            .skip(1)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .collect();
+        above.reverse();
+        let mut unread = Vec::new();
+        for dir in above {
+            if self.entry(dir).is_some_and(|e| e.loops) {
+                break;
+            }
+            if self.expand(dir) {
+                unread.push(dir.to_path_buf());
+            }
+        }
+        self.selected = Some(path.to_path_buf());
+        unread
+    }
+
     /// The visible rows, depth first, with the vein toward the selection.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
@@ -489,6 +512,50 @@ mod tests {
         assert!(!tree.expand(Path::new("src")));
         tree.invalidate(Path::new("src"));
         assert!(tree.expand(Path::new("src")));
+    }
+
+    fn paths(dirs: &[PathBuf]) -> Vec<&str> {
+        dirs.iter().map(|d| d.to_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn revealing_a_file_opens_the_folders_above_it() {
+        let mut tree = tree_with(&[("", vec![dir("docs"), file("top.md")])]);
+        let unread = tree.reveal(Path::new("docs/guide/deep/a.md"));
+        // Outermost first, so each listing can arrive in the order the rows need.
+        assert_eq!(paths(&unread), ["docs", "docs/guide", "docs/guide/deep"]);
+        assert!(tree.is_expanded(Path::new("docs")));
+        assert!(tree.is_expanded(Path::new("docs/guide/deep")));
+        assert_eq!(selected(&tree), Some("docs/guide/deep/a.md"));
+    }
+
+    #[test]
+    fn revealing_reads_only_folders_not_read_yet() {
+        let mut tree = sample();
+        tree.collapse(Path::new("docs"));
+        assert!(tree.reveal(Path::new("docs/guide/b.md")).is_empty());
+        assert!(tree.is_expanded(Path::new("docs")));
+        assert_eq!(selected(&tree), Some("docs/guide/b.md"));
+        assert!(
+            tree.rows()
+                .iter()
+                .any(|r| r.path == Path::new("docs/guide/b.md"))
+        );
+        // A top-level item has nothing above it to open.
+        assert!(tree.reveal(Path::new("top.md")).is_empty());
+        assert_eq!(selected(&tree), Some("top.md"));
+    }
+
+    #[test]
+    fn revealing_stops_at_a_folder_that_loops() {
+        let looping = DirEntry {
+            loops: true,
+            ..dir("self")
+        };
+        let mut tree = tree_with(&[("", vec![looping])]);
+        assert!(tree.reveal(Path::new("self/inner/a.md")).is_empty());
+        assert!(!tree.is_expanded(Path::new("self")));
+        assert!(!tree.is_expanded(Path::new("self/inner")));
     }
 
     #[test]
