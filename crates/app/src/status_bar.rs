@@ -22,6 +22,31 @@ pub struct Copied {
     pub seq: u64,
 }
 
+/// How the status bar names a language; the editor knows it by grammar name or file extension.
+pub fn language_label(language: &str) -> String {
+    let label = match language {
+        "markdown" | "md" => "Markdown",
+        "rust" | "rs" => "Rust",
+        "kotlin" | "kt" | "kts" => "Kotlin",
+        "java" => "Java",
+        "typescript" | "ts" => "TypeScript",
+        "tsx" => "TSX",
+        "javascript" | "js" | "jsx" => "JavaScript",
+        "json" => "JSON",
+        "yaml" | "yml" => "YAML",
+        "toml" => "TOML",
+        "sql" => "SQL",
+        "bash" | "sh" | "zsh" => "Shell",
+        "python" | "py" => "Python",
+        "go" => "Go",
+        "html" | "htm" => "HTML",
+        "css" | "scss" => "CSS",
+        "text" | "txt" | "" => "Plain Text",
+        other => return other.to_uppercase(),
+    };
+    label.to_string()
+}
+
 pub struct Status<'a> {
     /// The stem: the relative path (and cursor line) of what has focus.
     pub stem: Option<&'a str>,

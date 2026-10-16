@@ -440,7 +440,7 @@ impl Render for Workspace {
             Some(_) => tabs.error.clone().or(stem),
             None => Some("No folder open".to_string()),
         };
-        let language = active.map(|t| t.language.to_string());
+        let language = active.map(|t| status_bar::language_label(&t.language));
         let line_ending = active.map(|t| match t.line_ending {
             leaf_project::fs::LineEnding::Lf => "LF",
             leaf_project::fs::LineEnding::Crlf => "CRLF",
