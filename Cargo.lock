@@ -3390,6 +3390,7 @@ dependencies = [
  "gpui-pre-platform",
  "leaf-project",
  "serde_json",
+ "smol",
 ]
 
 [[package]]

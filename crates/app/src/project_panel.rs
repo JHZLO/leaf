@@ -130,12 +130,16 @@ impl ProjectPanel {
         .detach();
     }
 
-    /// Re-reads folders that changed on disk and are on screen.
-    #[expect(dead_code, reason = "called by the folder watcher (Phase 1)")]
+    /// Folders changed on disk: re-read the ones on screen, forget the closed ones until they open.
     pub fn refresh_dirs(&mut self, dirs: &[PathBuf], cx: &mut Context<Self>) {
         for dir in dirs {
-            if self.tree.listing(dir).is_some() {
+            if self.tree.listing(dir).is_none() {
+                continue;
+            }
+            if dir.as_os_str().is_empty() || self.tree.is_expanded(dir) {
                 self.load_dir(dir.clone(), cx);
+            } else {
+                self.tree.invalidate(dir);
             }
         }
     }

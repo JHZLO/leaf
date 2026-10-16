@@ -6,7 +6,7 @@ use std::{
 };
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::{paths, session};
+use leaf_project::{paths, session, watch};
 
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
@@ -27,6 +27,8 @@ pub struct Workspace {
     tree_visible: bool,
     copied: Option<Copied>,
     copy_seq: u64,
+    /// Dropping it stops watching the old folder.
+    _watcher: Option<watch::Watcher>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -93,6 +95,7 @@ impl Workspace {
             tree_visible: true,
             copied: None,
             copy_seq: 0,
+            _watcher: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -119,10 +122,38 @@ impl Workspace {
             .push(cx.subscribe(&self.tabs, |_, _, _: &TabsChanged, cx| cx.notify()));
         panel.read(cx).focus_handle(cx).focus(window, cx);
         self.panel = Some(panel);
+        self.watch(&root, window, cx);
         let mut saved = session::load(&session::default_path());
         saved.root = Some(root);
         let _ = session::save(&session::default_path(), &saved);
         cx.notify();
+    }
+
+    /// Watches the folder; each batch of outside changes refreshes the tree and the open files.
+    fn watch(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let (tx, rx) = smol::channel::unbounded::<watch::Changes>();
+        self._watcher = watch::Watcher::new(root, move |changes| {
+            let _ = tx.send_blocking(changes);
+        })
+        .map_err(|err| eprintln!("leaf: not watching {}: {err}", root.display()))
+        .ok();
+        // Ends when the watcher (and with it the sender) is dropped for another folder.
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(changes) = rx.recv().await {
+                let applied = this.update_in(cx, |this, window, cx| {
+                    if let Some(panel) = this.panel.clone() {
+                        panel.update(cx, |panel, cx| panel.refresh_dirs(&changes.dirs, cx));
+                    }
+                    this.tabs.update(cx, |tabs, cx| {
+                        tabs.files_changed(&changes.files, window, cx)
+                    });
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn root(&self, cx: &App) -> Option<PathBuf> {

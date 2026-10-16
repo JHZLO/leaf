@@ -535,7 +535,6 @@ impl EditorTabs {
 
     /// Files changed on disk outside leaf (relative to the open folder, as the watcher reports them).
     /// A clean tab reloads, a tab with edits shows a banner, a deleted file marks its tab.
-    #[expect(dead_code, reason = "called by the folder watcher (Phase 1)")]
     pub fn files_changed(
         &mut self,
         files: &[PathBuf],

@@ -46,7 +46,8 @@ pub fn list_dir(root: &Path, dir: &Path) -> io::Result<Vec<DirEntry>> {
     for entry in std::fs::read_dir(&abs_dir)? {
         let entry = entry?;
         let name = crate::paths::display_name(&entry.file_name());
-        if name == ".git" || name == ".DS_Store" {
+        // `.leaf-save-*.tmp` lives only for the instant of an atomic save.
+        if name == ".git" || name == ".DS_Store" || name.starts_with(".leaf-save-") {
             continue;
         }
         let path = entry.path();
