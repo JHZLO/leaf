@@ -42,7 +42,7 @@ pub fn navigate(rows: &[Row], selected: Option<&Path>, key: NavKey) -> NavOutcom
         (NavKey::PageDown(_), None) | (NavKey::PageUp(_), None) => Some(0),
         (NavKey::Right, Some(i)) => {
             let row = &rows[i];
-            if row.kind == EntryKind::Dir && !row.expanded {
+            if row.kind == EntryKind::Dir && !row.expanded && !row.loops {
                 outcome.expand = Some(row.path.clone());
                 None
             } else if row.kind == EntryKind::Dir

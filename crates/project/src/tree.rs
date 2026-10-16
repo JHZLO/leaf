@@ -3,6 +3,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsStr,
     path::{Component, Path, PathBuf},
 };
 
@@ -17,6 +18,8 @@ pub struct Row {
     pub kind: EntryKind,
     pub expanded: bool,
     pub ignored: bool,
+    /// A symlinked folder that leads back up the tree; it never opens.
+    pub loops: bool,
     /// One per ancestor level, outermost first (`guides[level]`).
     pub guides: Vec<Guide>,
 }
@@ -116,9 +119,22 @@ impl ProjectTree {
     }
 
     /// Opens a folder. Returns true when its listing has not been read yet.
+    /// A symlinked folder that loops back up stays closed and needs no listing.
     pub fn expand(&mut self, dir: &Path) -> bool {
+        if self.entry(dir).is_some_and(|e| e.loops) {
+            return false;
+        }
         self.expanded.insert(dir.to_path_buf());
         !self.listings.contains_key(dir)
+    }
+
+    /// The listed entry for `path`, when its folder has been read.
+    fn entry(&self, path: &Path) -> Option<&DirEntry> {
+        let name = path.file_name()?;
+        self.listings
+            .get(path.parent()?)?
+            .iter()
+            .find(|e| OsStr::new(&e.name) == name)
     }
 
     /// Closes a folder; a selection inside it moves up to the folder.
@@ -159,7 +175,9 @@ impl ProjectTree {
         };
         for entry in entries {
             let path = dir.join(&entry.name);
-            let expanded = entry.kind == EntryKind::Dir && self.expanded.contains(&path);
+            // A folder opened before its listing said it loops still stays closed.
+            let expanded =
+                entry.kind == EntryKind::Dir && !entry.loops && self.expanded.contains(&path);
             rows.push(Row {
                 path: path.clone(),
                 name: entry.name.clone(),
@@ -167,6 +185,7 @@ impl ProjectTree {
                 kind: entry.kind,
                 expanded,
                 ignored: entry.ignored,
+                loops: entry.loops,
                 guides: vec![Guide::default(); depth],
             });
             if expanded {
@@ -470,5 +489,26 @@ mod tests {
         assert!(!tree.expand(Path::new("src")));
         tree.invalidate(Path::new("src"));
         assert!(tree.expand(Path::new("src")));
+    }
+
+    #[test]
+    fn a_looping_symlinked_folder_stays_closed() {
+        let looping = DirEntry {
+            loops: true,
+            ..dir("self")
+        };
+        let mut tree = tree_with(&[("", vec![dir("docs"), looping.clone()])]);
+        assert!(!tree.expand(Path::new("self")));
+        assert!(!tree.is_expanded(Path::new("self")));
+
+        // Opened (say, from a session) before the listing said it loops.
+        let mut tree = ProjectTree::new(PathBuf::from("/project"));
+        tree.expand(Path::new("self"));
+        tree.set_listing("".into(), vec![looping]);
+        tree.set_listing("self".into(), vec![dir("self")]);
+        let rows = tree.rows();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].loops);
+        assert!(!rows[0].expanded);
     }
 }
