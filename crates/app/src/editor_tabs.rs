@@ -6,8 +6,9 @@ use std::{
 };
 
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Sizable as _, WindowExt as _,
     button::Button,
+    dialog::{DialogEntrance, DialogFooter},
     input::{Editor, EditorState, InputEvent, RopeExt as _},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -34,6 +35,9 @@ pub struct Tab {
     deleted: bool,
     /// The file changed on disk under unsaved edits: its stamp there, until the user picks a side.
     conflict: Option<FileStamp>,
+    /// Counts edits, so a save that finishes after more typing leaves the tab dirty.
+    edits: u64,
+    saving: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,6 +77,25 @@ impl Focusable for EditorTabs {
             Some(tab) => tab.editor.focus_handle(cx),
             None => self.focus_handle.clone(),
         }
+    }
+}
+
+fn file_name(path: &Path) -> SharedString {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .into()
+}
+
+/// The active tab after the tab at `closed` is removed, leaving `len` tabs.
+fn active_after_close(active: Option<usize>, closed: usize, len: usize) -> Option<usize> {
+    let active = active?;
+    if len == 0 {
+        None
+    } else if active > closed {
+        Some(active - 1)
+    } else {
+        Some(active.min(len - 1))
     }
 }
 
@@ -256,6 +279,8 @@ impl EditorTabs {
             language,
             deleted: false,
             conflict: None,
+            edits: 0,
+            saving: false,
             _subscriptions: subscriptions,
         }
     }
@@ -264,6 +289,7 @@ impl EditorTabs {
         if let Some(tab) = self.tabs.iter_mut().find(|t| &t.editor == editor) {
             tab.dirty = true;
             tab.leaf_through = false;
+            tab.edits += 1;
         }
         self.refresh_preview(cx);
         cx.emit(TabsChanged);
@@ -294,37 +320,211 @@ impl EditorTabs {
         self.focus_active(window, cx);
     }
 
-    pub fn save_active(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
-        let Some(index) = self.active else {
-            return Ok(());
-        };
-        let tab = &self.tabs[index];
-        if tab.read_only {
-            return Err("mixed line endings: read-only".into());
+    /// Saves the active tab off the main thread. Failures go to [`Self::error`].
+    pub fn save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.active_tab() {
+            let id = tab.editor.entity_id();
+            self.save(id, false, false, window, cx);
         }
-        let text = tab.editor.read(cx).value().to_string();
-        let path = fs::write_target(&self.root.join(&tab.path));
-        let stamp =
-            fs::write_text(&path, &text, tab.line_ending, tab.bom).map_err(|e| e.to_string())?;
-        let tab = &mut self.tabs[index];
-        tab.stamp = stamp;
-        tab.dirty = false;
-        tab.leaf_through = false;
-        cx.emit(TabsChanged);
-        cx.notify();
-        Ok(())
     }
 
-    pub fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.active else { return };
-        self.tabs.remove(index);
-        self.active = if self.tabs.is_empty() {
-            None
-        } else {
-            Some(index.min(self.tabs.len() - 1))
+    /// Writes the tab to disk. Unless `overwrite`, asks first when the file changed on disk since it
+    /// was read or written; `then_close` closes the tab once the file is written.
+    fn save(
+        &mut self,
+        id: EntityId,
+        overwrite: bool,
+        then_close: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of(id) else {
+            return;
         };
+        let tab = &mut self.tabs[index];
+        if tab.read_only {
+            self.error = Some(format!(
+                "{}: mixed line endings, read-only",
+                tab.path.display()
+            ));
+            cx.emit(TabsChanged);
+            cx.notify();
+            return;
+        }
+        // One write per tab at a time, so an older text never lands after a newer one.
+        if tab.saving {
+            return;
+        }
+        tab.saving = true;
+        let edits = tab.edits;
+        // The rope is shared, not copied; it becomes a string on the background executor.
+        let text = tab.editor.read(cx).text().clone();
+        let path = self.root.join(&tab.path);
+        // A deleted file is written again without asking.
+        let expected = (!overwrite && !tab.deleted).then_some(tab.stamp);
+        let (line_ending, bom) = (tab.line_ending, tab.bom);
+        let task = cx
+            .background_executor()
+            .spawn(async move { write_file(&path, &text.to_string(), expected, line_ending, bom) });
+        cx.spawn_in(window, async move |this, cx| {
+            let saved = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_save(id, edits, then_close, saved, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn finish_save(
+        &mut self,
+        id: EntityId,
+        edits: u64,
+        then_close: bool,
+        saved: Saved,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let tab = &mut self.tabs[index];
+        tab.saving = false;
+        match saved {
+            Saved::Written(stamp) => {
+                tab.stamp = stamp;
+                tab.deleted = false;
+                tab.conflict = None;
+                tab.leaf_through = false;
+                // Typing while the file was written leaves edits the file does not have yet.
+                if tab.edits == edits {
+                    tab.dirty = false;
+                }
+                self.error = None;
+                if then_close {
+                    self.remove_tab(index, window, cx);
+                }
+            }
+            Saved::ChangedOnDisk => self.confirm_overwrite(id, then_close, window, cx),
+            Saved::Failed(err) => {
+                self.error = Some(format!("{}: {err}", tab.path.display()));
+            }
+        }
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
+    fn confirm_overwrite(
+        &mut self,
+        id: EntityId,
+        then_close: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let name = file_name(&self.tabs[index].path);
+        let this = cx.entity().downgrade();
+        // Each choice closes the dialog itself first, so focus is back in the editor before the tab changes.
+        let overwrite = move |window: &mut Window, cx: &mut App| {
+            window.close_dialog(cx);
+            let _ = this.update(cx, |tabs, cx| tabs.save(id, true, then_close, window, cx));
+        };
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let ok = overwrite.clone();
+            let click = overwrite.clone();
+            alert
+                .title(format!("{name} changed on disk"))
+                .description("Saving replaces the version on disk with yours.")
+                .entrance(DialogEntrance::None)
+                .on_ok(move |_, window, cx| {
+                    ok(window, cx);
+                    false
+                })
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            leaf_button("cancel", "Cancel", cx)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            leaf_button("overwrite", "Overwrite", cx)
+                                .on_click(move |_, window, cx| click(window, cx)),
+                        ),
+                )
+        });
+    }
+
+    /// Closes the active tab, asking first when it has unsaved edits.
+    pub fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_tab() else { return };
+        let id = tab.editor.entity_id();
+        if tab.dirty {
+            self.confirm_close(id, window, cx);
+        } else if let Some(index) = self.index_of(id) {
+            self.remove_tab(index, window, cx);
+        }
+    }
+
+    fn confirm_close(&mut self, id: EntityId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let name = file_name(&self.tabs[index].path);
+        let this = cx.entity().downgrade();
+        let save = {
+            let this = this.clone();
+            move |window: &mut Window, cx: &mut App| {
+                window.close_dialog(cx);
+                let _ = this.update(cx, |tabs, cx| tabs.save(id, false, true, window, cx));
+            }
+        };
+        let discard = move |window: &mut Window, cx: &mut App| {
+            window.close_dialog(cx);
+            let _ = this.update(cx, |tabs, cx| {
+                if let Some(index) = tabs.index_of(id) {
+                    tabs.remove_tab(index, window, cx);
+                }
+            });
+        };
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let ok = save.clone();
+            let click = save.clone();
+            let discard = discard.clone();
+            alert
+                .title(format!("Save changes to {name}?"))
+                .description("Your changes are lost if you don't save them.")
+                .entrance(DialogEntrance::None)
+                .on_ok(move |_, window, cx| {
+                    ok(window, cx);
+                    false
+                })
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            leaf_button("dont-save", "Don't save", cx)
+                                .on_click(move |_, window, cx| discard(window, cx)),
+                        )
+                        .child(
+                            leaf_button("cancel", "Cancel", cx)
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            leaf_button("save", "Save", cx)
+                                .on_click(move |_, window, cx| click(window, cx)),
+                        ),
+                )
+        });
+    }
+
+    fn remove_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self.focus_handle.contains_focused(window, cx);
+        self.tabs.remove(index);
+        self.active = active_after_close(self.active, index, self.tabs.len());
+        if had_focus {
+            self.focus_active(window, cx);
+        }
         self.refresh_preview(cx);
-        self.focus_active(window, cx);
         cx.emit(TabsChanged);
         cx.notify();
     }
@@ -552,11 +752,7 @@ impl EditorTabs {
             .enumerate()
             .map(|(i, tab)| {
                 let active = self.active == Some(i);
-                let name = tab
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                let name = file_name(&tab.path);
                 div()
                     .id(("tab", i))
                     .relative()
@@ -728,6 +924,37 @@ impl Render for EditorTabs {
     }
 }
 
+/// How a save ended.
+#[derive(Debug)]
+enum Saved {
+    Written(FileStamp),
+    /// The file is no longer what the tab read or last wrote; nothing was written.
+    ChangedOnDisk,
+    Failed(String),
+}
+
+/// Writes `text` to `path` (a symlink's target), unless the file's stamp is no longer `expected`.
+/// Runs on the background executor.
+fn write_file(
+    path: &Path,
+    text: &str,
+    expected: Option<FileStamp>,
+    line_ending: LineEnding,
+    bom: bool,
+) -> Saved {
+    let target = fs::write_target(path);
+    if let Some(expected) = expected
+        && let Ok(stamp) = fs::stamp(&target)
+        && stamp != expected
+    {
+        return Saved::ChangedOnDisk;
+    }
+    match fs::write_text(&target, text, line_ending, bom) {
+        Ok(stamp) => Saved::Written(stamp),
+        Err(err) => Saved::Failed(err.to_string()),
+    }
+}
+
 /// What the disk says about an open tab's file.
 #[derive(Debug)]
 enum DiskState {
@@ -755,13 +982,65 @@ fn check_disk(path: &Path, known: FileStamp, dirty: bool) -> DiskState {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's glob export includes a `test` macro that would replace the built-in one.
-    use super::{DiskState, check_disk};
-    use leaf_project::fs;
+    use super::{DiskState, Saved, active_after_close, check_disk, write_file};
+    use leaf_project::fs::{self, LineEnding};
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("leaf-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn closing_a_tab_keeps_the_active_one_when_it_can() {
+        assert_eq!(active_after_close(Some(2), 0, 3), Some(1));
+        assert_eq!(active_after_close(Some(0), 2, 3), Some(0));
+        assert_eq!(active_after_close(Some(1), 1, 2), Some(1));
+        assert_eq!(active_after_close(Some(2), 2, 2), Some(1));
+        assert_eq!(active_after_close(Some(0), 0, 0), None);
+        assert_eq!(active_after_close(None, 0, 1), None);
+    }
+
+    #[test]
+    fn write_file_asks_before_replacing_a_changed_file() {
+        let dir = temp_dir("write-file");
+        let path = dir.join("a.md");
+        std::fs::write(&path, "one\n").unwrap();
+        let read = fs::stamp(&path).unwrap();
+
+        let written = match write_file(&path, "two\n", Some(read), LineEnding::Lf, false) {
+            Saved::Written(stamp) => stamp,
+            other => panic!("expected a write, got {other:?}"),
+        };
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+
+        std::fs::write(&path, "changed elsewhere\n").unwrap();
+        assert!(matches!(
+            write_file(&path, "three\n", Some(written), LineEnding::Lf, false),
+            Saved::ChangedOnDisk
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "changed elsewhere\n"
+        );
+
+        // Overwriting, or writing a deleted file again, does not check.
+        assert!(matches!(
+            write_file(&path, "three\n", None, LineEnding::Lf, false),
+            Saved::Written(_)
+        ));
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            write_file(&path, "four\n", None, LineEnding::Lf, false),
+            Saved::Written(_)
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "four\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn check_disk_follows_the_file() {
-        let dir = std::env::temp_dir().join(format!("leaf-check-disk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("check-disk");
         let path = dir.join("a.md");
         std::fs::write(&path, "one\n").unwrap();
         let known = fs::stamp(&path).unwrap();

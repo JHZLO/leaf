@@ -237,12 +237,9 @@ impl Workspace {
         }
     }
 
-    fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
-        let result = self.tabs.update(cx, |tabs, cx| tabs.save_active(cx));
-        if let Err(err) = result {
-            self.tabs.update(cx, |tabs, _| tabs.error = Some(err));
-        }
-        cx.notify();
+    fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs
+            .update(cx, |tabs, cx| tabs.save_active(window, cx));
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
