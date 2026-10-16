@@ -1,1 +1,228 @@
 //! The list of files under the open folder that the finder searches (gitignored files left out).
+
+use std::{
+    cmp::Ordering,
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering::Relaxed},
+    },
+};
+
+use ignore::{WalkBuilder, WalkState};
+
+/// More files than this stops the walk: a folder that big is not one leaf is meant for, and
+/// the finder should still answer instead of reading the disk for minutes.
+pub const MAX_FILES: usize = 200_000;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FileIndex {
+    /// Paths relative to the open folder, `/`-separated, NFC, in [`compare_paths`] order.
+    pub paths: Vec<String>,
+    /// The walk stopped at [`MAX_FILES`]; `paths` holds the files found until then.
+    pub capped: bool,
+}
+
+/// Every file under `root` the finder offers: what the tree shows, minus the gitignored files.
+pub fn build(root: &Path) -> FileIndex {
+    build_with_limit(root, MAX_FILES)
+}
+
+fn build_with_limit(root: &Path, limit: usize) -> FileIndex {
+    // The same rules as the tree (fs.rs): `.gitignore` files from `root` down and
+    // `.git/info/exclude`, with or without a git repository, nothing from above `root`
+    // or from the global git config. Hidden files stay; the tree shows them too.
+    let walk = WalkBuilder::new(root)
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_global(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .require_git(false)
+        // The tree opens symlinked folders; the walker skips the ones that loop.
+        .follow_links(true)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        // In parallel: following links costs a stat per entry, and 90k files then take
+        // about a third of the time they take on one thread (measured on ~/.cargo/registry).
+        .build_parallel();
+    let paths = Mutex::new(Vec::new());
+    let capped = AtomicBool::new(false);
+    walk.run(|| {
+        Box::new(|entry| {
+            // Unreadable folders and symlink loops are left out, as the tree leaves them closed.
+            let Ok(entry) = entry else {
+                return WalkState::Continue;
+            };
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
+                return WalkState::Continue;
+            }
+            let name = entry.file_name().to_string_lossy();
+            // `.leaf-save-*.tmp` lives only for the instant of an atomic save.
+            if name == ".DS_Store" || name.starts_with(".leaf-save-") {
+                return WalkState::Continue;
+            }
+            let Ok(rel) = entry.path().strip_prefix(root) else {
+                return WalkState::Continue;
+            };
+            let rel = crate::paths::relative(rel);
+            let mut paths = paths.lock().unwrap_or_else(|e| e.into_inner());
+            if paths.len() == limit {
+                capped.store(true, Relaxed);
+                return WalkState::Quit;
+            }
+            paths.push(rel);
+            WalkState::Continue
+        })
+    });
+    let mut paths = paths.into_inner().unwrap_or_else(|e| e.into_inner());
+    paths.sort_unstable_by(|a, b| compare_paths(a, b));
+    FileIndex {
+        paths,
+        capped: capped.into_inner(),
+    }
+}
+
+/// Case-insensitive, then exact, so the order never depends on the order the disk returned.
+pub fn compare_paths(a: &str, b: &str) -> Ordering {
+    // Folding byte by byte when both are ASCII keeps a 200k sort quick.
+    let folded = if a.is_ascii() && b.is_ascii() {
+        let a = a.bytes().map(|c| c.to_ascii_lowercase());
+        a.cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    } else {
+        let a = a.chars().flat_map(char::to_lowercase);
+        a.cmp(b.chars().flat_map(char::to_lowercase))
+    };
+    folded.then_with(|| a.cmp(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    fn write(root: &Path, path: &str) {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+
+    #[test]
+    fn lists_every_file_sorted_ignoring_case() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        for path in [
+            "src/main.rs",
+            "README.md",
+            "docs/guide/keys.md",
+            "docs/Notes.md",
+            ".github/ci.yml",
+            ".env",
+            "empty/.keep",
+        ] {
+            write(root, path);
+        }
+        std::fs::create_dir(root.join("nothing")).unwrap();
+        let index = build(root);
+        assert_eq!(
+            index.paths,
+            [
+                ".env",
+                ".github/ci.yml",
+                "docs/guide/keys.md",
+                "docs/Notes.md",
+                "empty/.keep",
+                "README.md",
+                "src/main.rs",
+            ]
+        );
+        assert!(!index.capped);
+    }
+
+    #[test]
+    fn leaves_out_git_and_gitignored_files() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::write(root.join(".gitignore"), "target/\n*.log\n!keep.log\n").unwrap();
+        write(root, ".git/info/exclude");
+        std::fs::write(root.join(".git/info/exclude"), "secret.txt\n").unwrap();
+        write(root, "docs/.gitignore");
+        std::fs::write(root.join("docs/.gitignore"), "draft.md\n").unwrap();
+        for path in [
+            ".git/HEAD",
+            "target/debug/leaf",
+            "a.log",
+            "keep.log",
+            "secret.txt",
+            "readme.md",
+            "docs/draft.md",
+            "docs/guide.md",
+            ".DS_Store",
+            ".leaf-save-1.tmp",
+        ] {
+            write(root, path);
+        }
+        assert_eq!(
+            build(root).paths,
+            [
+                ".gitignore",
+                "docs/.gitignore",
+                "docs/guide.md",
+                "keep.log",
+                "readme.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn decomposed_hangul_paths_come_back_composed() {
+        let root = tempfile::tempdir().unwrap();
+        let nfd = "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}";
+        write(root.path(), &format!("{nfd}/{nfd}.md"));
+        assert_eq!(
+            build(root.path()).paths,
+            ["\u{d55c}\u{ae00}/\u{d55c}\u{ae00}.md"]
+        );
+    }
+
+    #[test]
+    fn follows_symlinks_but_not_loops() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write(root, "a/note.md");
+        write(outside.path(), "shared.md");
+        symlink(outside.path(), root.join("outside")).unwrap();
+        symlink("..", root.join("a/up")).unwrap();
+        symlink("note.md", root.join("a/link.md")).unwrap();
+        assert_eq!(
+            build(root).paths,
+            ["a/link.md", "a/note.md", "outside/shared.md"]
+        );
+    }
+
+    #[test]
+    fn stops_at_the_limit_and_says_so() {
+        let root = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            write(root.path(), &format!("f{i}.md"));
+        }
+        let index = build_with_limit(root.path(), 3);
+        assert_eq!(index.paths.len(), 3);
+        assert!(index.capped);
+        let index = build_with_limit(root.path(), 5);
+        assert_eq!(index.paths.len(), 5);
+        assert!(!index.capped);
+    }
+
+    #[test]
+    fn paths_equal_but_for_case_sort_by_exact_path() {
+        let mut paths = vec!["b.md", "B.md", "a/z.md", "A/y.md", "\u{c544}.md", "Z.md"];
+        paths.sort_by(|a, b| compare_paths(a, b));
+        assert_eq!(
+            paths,
+            ["A/y.md", "a/z.md", "B.md", "b.md", "Z.md", "\u{c544}.md"]
+        );
+    }
+}
