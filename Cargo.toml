@@ -1,0 +1,39 @@
+[package]
+name = "leaf-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui-kit = "=0.7.3"
+# This Mac has only the Command Line Tools (no Xcode metal compiler), so shaders compile at startup.
+gpui-pre-platform = { version = "=0.3.9", features = ["runtime_shaders"] }
+gpui-fast-platform = { version = "=0.1.8", features = ["runtime_shaders"], optional = true }
+
+[features]
+default = ["langs"]
+# The 17 grammars PRD 4.1 names; json comes with the base tree-sitter feature.
+langs = [
+    "gpui-kit/tree-sitter-markdown",
+    "gpui-kit/tree-sitter-markdown-inline",
+    "gpui-kit/tree-sitter-rust",
+    "gpui-kit/tree-sitter-kotlin",
+    "gpui-kit/tree-sitter-java",
+    "gpui-kit/tree-sitter-typescript",
+    "gpui-kit/tree-sitter-tsx",
+    "gpui-kit/tree-sitter-javascript",
+    "gpui-kit/tree-sitter-yaml",
+    "gpui-kit/tree-sitter-toml",
+    "gpui-kit/tree-sitter-sql",
+    "gpui-kit/tree-sitter-bash",
+    "gpui-kit/tree-sitter-python",
+    "gpui-kit/tree-sitter-go",
+    "gpui-kit/tree-sitter-html",
+    "gpui-kit/tree-sitter-css",
+]
+fast = ["gpui-kit/gpui-fast", "dep:gpui-fast-platform"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
