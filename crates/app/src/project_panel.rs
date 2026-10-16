@@ -159,9 +159,16 @@ impl ProjectPanel {
         }
     }
 
-    fn render_row(row: &Row, selected: bool, cx: &App) -> Stateful<Div> {
+    /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
+    fn render_row(row: &Row, selected: bool, focused: bool, cx: &App) -> Stateful<Div> {
         let p = theme::colors(cx);
         let is_dir = row.kind == EntryKind::Dir;
+        let (ink, chevron_color) = match (selected, focused) {
+            (true, true) => (p.sel_ink, p.sel_ink),
+            (true, false) => (p.ink, p.sub),
+            (false, _) if row.ignored => (p.ignored, p.sub),
+            (false, _) => (p.ink, p.sub),
+        };
         let mut el = div()
             .id(ElementId::Name(
                 row.path.to_string_lossy().to_string().into(),
@@ -175,14 +182,11 @@ impl ProjectPanel {
             .pl(z(row_padding(row.depth), cx))
             .pr(z(ROW_PADDING_RIGHT, cx))
             .whitespace_nowrap()
-            .text_color(c(if selected {
-                p.sel_ink
-            } else if row.ignored {
-                p.ignored
-            } else {
-                p.ink
-            }))
-            .when(selected, |el| el.bg(c(p.sel_bg)));
+            .text_color(c(ink))
+            .when(selected, |el| {
+                el.bg(c(if focused { p.sel_bg } else { p.guide }))
+            })
+            .when(!selected, |el| el.hover(|style| style.bg(c(p.hover))));
         for (level, guide) in row.guides.iter().enumerate() {
             let x = guide_x(level);
             // The 2 px vein covers the 1 px guide and one pixel to its left.
@@ -214,7 +218,6 @@ impl ProjectPanel {
                 );
             }
         }
-        let chevron_color = c(if selected { p.sel_ink } else { p.sub });
         el.child(
             div()
                 .size(z(CHEVRON_SLOT, cx))
@@ -227,7 +230,7 @@ impl ProjectPanel {
                         Icon::default()
                             .data(CHEVRON)
                             .size(z(CHEVRON_SIZE, cx))
-                            .text_color(chevron_color)
+                            .text_color(c(chevron_color))
                             .when(row.expanded, |icon| {
                                 icon.rotate(radians(std::f32::consts::FRAC_PI_2))
                             }),
@@ -239,8 +242,9 @@ impl ProjectPanel {
 }
 
 impl Render for ProjectPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
+        let focused = self.focus_handle.contains_focused(window, cx);
         let rows = self.tree.rows();
         let selected = self.tree.selected().map(Path::to_path_buf);
         let root_name = self
@@ -320,6 +324,7 @@ impl Render for ProjectPanel {
                                 Self::render_row(
                                     row,
                                     selected.as_deref() == Some(row.path.as_path()),
+                                    focused,
                                     cx,
                                 )
                             })
