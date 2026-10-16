@@ -23,6 +23,8 @@ actions!(
         ZoomOut,
         ZoomReset,
         Quit,
+        ToggleFinder,
+        RevealInFinder,
     ]
 );
 
@@ -40,6 +42,9 @@ actions!(
         Open,
         LeafThrough,
         FocusEditor,
+        NewFile,
+        Rename,
+        Trash,
     ]
 );
 
@@ -72,5 +77,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", Open, panel),
         KeyBinding::new("space", LeafThrough, panel),
         KeyBinding::new("escape", FocusEditor, panel),
+        KeyBinding::new("cmd-shift-o", ToggleFinder, ws),
+        KeyBinding::new("cmd-alt-r", RevealInFinder, ws),
+        KeyBinding::new("cmd-n", NewFile, panel),
+        KeyBinding::new("shift-f6", Rename, panel),
+        KeyBinding::new("cmd-backspace", Trash, panel),
+        // Markdown editing keys (Phase 2) go below this line, in their own block.
     ]);
 }

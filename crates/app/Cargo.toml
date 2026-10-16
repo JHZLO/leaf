@@ -38,4 +38,5 @@ tempfile.workspace = true
 # Offscreen UI checks with real rendering; AppKit needs the main thread, so no test harness.
 [[test]]
 name = "visual"
+path = "tests/visual/main.rs"
 harness = false

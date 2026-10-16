@@ -2,6 +2,9 @@
 //! Nothing here depends on GPUI, so these rules test in seconds.
 
 pub mod fs;
+pub mod fuzzy;
+pub mod index;
+pub mod markdown;
 pub mod nav;
 pub mod paths;
 pub mod session;

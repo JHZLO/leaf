@@ -6,6 +6,7 @@
 
 mod editor_tabs;
 mod empty_state;
+mod finder;
 pub mod keymap;
 mod menus;
 mod preview;
