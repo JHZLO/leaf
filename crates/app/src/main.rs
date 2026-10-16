@@ -5,6 +5,7 @@
 
 mod editor_tabs;
 mod keymap;
+mod menus;
 mod preview;
 mod project_panel;
 mod status_bar;
@@ -20,6 +21,7 @@ fn main() {
         gpui_kit::init(cx);
         theme::init(cx);
         keymap::init(cx);
+        menus::init(cx);
         cx.on_action(|_: &keymap::Quit, cx| cx.quit());
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
