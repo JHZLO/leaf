@@ -48,7 +48,7 @@ pub fn render(status: Status<'_>, cx: &App) -> impl IntoElement {
     let base = div()
         .px_2()
         .rounded(px(4.))
-        .font_family("Menlo")
+        .font_family(theme::MONO_FONT)
         .text_size(z(11.5, cx))
         .text_color(c(if holding.is_some() { p.sel_ink } else { p.ink }))
         .when(holding.is_some(), |el| el.bg(c(p.sel_bg)))

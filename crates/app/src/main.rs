@@ -18,22 +18,25 @@ use std::path::PathBuf;
 
 fn main() {
     let arg = std::env::args_os().nth(1).map(PathBuf::from);
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        theme::init(cx);
-        keymap::init(cx);
-        menus::init(cx);
-        cx.on_action(|_: &keymap::Quit, cx| cx.quit());
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            theme::init(cx);
+            keymap::init(cx);
+            menus::init(cx);
+            cx.on_action(|_: &keymap::Quit, cx| cx.quit());
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            workspace::open(arg, cx);
+            // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
+            if std::env::var_os("LEAF_BACKGROUND").is_none() {
+                cx.activate(true);
             }
-        })
-        .detach();
-        workspace::open(arg, cx);
-        // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
-        if std::env::var_os("LEAF_BACKGROUND").is_none() {
-            cx.activate(true);
-        }
-    });
+        });
 }

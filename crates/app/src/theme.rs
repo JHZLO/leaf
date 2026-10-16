@@ -82,6 +82,9 @@ pub const DARK: Palette = Palette {
     syn_comment: 0x7D7568,
 };
 
+/// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.
+pub const MONO_FONT: &str = ".AppleSystemUIFontMonospaced";
+
 /// The palette for the current appearance.
 pub fn colors(cx: &App) -> &'static Palette {
     if cx.theme().is_dark() { &DARK } else { &LIGHT }
@@ -145,7 +148,7 @@ fn theme_config(name: &str, mode: &str, p: &Palette) -> serde_json::Value {
         "name": name,
         "mode": mode,
         "font.size": size::UI_TEXT,
-        "mono_font.family": "Menlo",
+        "mono_font.family": MONO_FONT,
         "mono_font.size": size::EDITOR_TEXT,
         "radius": 4,
         "radius.lg": 6,
@@ -166,6 +169,10 @@ fn theme_config(name: &str, mode: &str, p: &Palette) -> serde_json::Value {
             "primary.foreground": hex(p.paper),
             "secondary.background": hex(p.side),
             "secondary.foreground": hex(p.ink),
+            "button.background": hex(p.side),
+            "button.hover.background": hex(p.hover),
+            "button.active.background": hex(p.guide),
+            "button.foreground": hex(p.ink),
             "popover.background": hex(p.paper),
             "popover.foreground": hex(p.ink),
             "list.background": hex(p.side),
