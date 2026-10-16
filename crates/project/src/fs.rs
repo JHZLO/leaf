@@ -464,6 +464,34 @@ pub fn rename(root: &Path, from: &Path, new_name: &str) -> Result<PathBuf, NameE
     Ok(to)
 }
 
+/// Moves an item of the open folder (`path`, relative to `root`) to the Trash.
+pub fn trash(root: &Path, path: &Path) -> io::Result<()> {
+    // The open folder itself is never a row, so an empty path can only be a mistake.
+    if path.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the open folder cannot go to the Trash",
+        ));
+    }
+    let mut trash = trash::TrashContext::default();
+    // Finder's way asks for permission to control Finder and plays a sound; the system call
+    // needs neither. Its cost: some macOS versions offer no "Put Back" for the item.
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos as _};
+        trash.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    trash.delete(root.join(path)).map_err(|err| {
+        let message = match err {
+            trash::Error::Os { description, .. } | trash::Error::Unknown { description } => {
+                description
+            }
+            other => other.to_string(),
+        };
+        io::Error::other(message)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
@@ -999,6 +1027,17 @@ mod tests {
             renamed(root.path(), "a.md", "  "),
             Err("Type a name".into())
         );
+        assert_eq!(dir_names(root.path()), ["a.md"]);
+    }
+
+    // Moving something to the Trash cannot be tested without filling the real Trash of whoever
+    // runs the tests, so only the refusal is tested here.
+    #[test]
+    fn the_open_folder_never_goes_to_the_trash() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a.md"), "");
+        let err = trash(root.path(), Path::new("")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(dir_names(root.path()), ["a.md"]);
     }
 

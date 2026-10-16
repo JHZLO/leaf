@@ -213,6 +213,16 @@ impl ProjectTree {
         }
     }
 
+    /// Forgets an item that is gone and everything inside it: a new item by the same name
+    /// starts closed, without the old contents.
+    pub fn forget(&mut self, path: &Path) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        self.listings.retain(|dir, _| !dir.starts_with(path));
+        self.expanded.retain(|dir| !dir.starts_with(path));
+    }
+
     /// The visible rows, depth first, with the vein toward the selection.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
@@ -638,6 +648,30 @@ mod tests {
         assert!(tree.is_expanded(Path::new("docs2")));
         assert!(tree.listing(Path::new("docs2")).is_some());
         assert_eq!(selected(&tree), Some("docs2/b.md"));
+    }
+
+    #[test]
+    fn a_forgotten_folder_comes_back_closed_and_unread() {
+        let mut tree = sample();
+        tree.forget(Path::new("docs"));
+        assert!(!tree.is_expanded(Path::new("docs")));
+        assert!(!tree.is_expanded(Path::new("docs/guide")));
+        assert!(tree.listing(Path::new("docs/guide")).is_none());
+        // The folder holding it keeps its listing until it is read again.
+        assert!(tree.listing(Path::new("")).is_some());
+        assert!(tree.expand(Path::new("docs")));
+    }
+
+    #[test]
+    fn forgetting_leaves_names_that_only_start_the_same() {
+        let mut tree = tree_with(&[
+            ("", vec![dir("docs"), dir("docs2")]),
+            ("docs", vec![]),
+            ("docs2", vec![]),
+        ]);
+        tree.forget(Path::new("docs"));
+        assert!(tree.is_expanded(Path::new("docs2")));
+        assert!(tree.listing(Path::new("docs2")).is_some());
     }
 
     #[test]

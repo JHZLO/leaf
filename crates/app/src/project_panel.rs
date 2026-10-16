@@ -22,7 +22,7 @@ use leaf_project::{
 use crate::{
     keymap::{
         Collapse, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
-        Rename, SelectFirst, SelectLast, SelectNext, SelectPrev,
+        Rename, SelectFirst, SelectLast, SelectNext, SelectPrev, Trash,
     },
     theme::{self, c, size, z},
 };
@@ -93,6 +93,7 @@ pub enum PanelEvent {
 #[expect(dead_code, reason = "the workspace does not follow these yet")]
 pub enum FileEvent {
     Renamed { from: PathBuf, to: PathBuf },
+    Trashed { path: PathBuf },
 }
 
 pub struct ProjectPanel {
@@ -413,6 +414,58 @@ impl ProjectPanel {
         let select = name_selection(&row.name, row.kind);
         self.start_edit(target, &row.name, select, window, cx);
         self.reveal_selection();
+    }
+
+    /// Cmd+Backspace: asks, then moves the selection to the Trash off the main thread.
+    fn trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
+        let Some(path) = self.tree.selected().map(Path::to_path_buf) else {
+            return;
+        };
+        self.search = None;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Move “{name}” to the Trash?"),
+            None,
+            &["Move to Trash", "Cancel"],
+            cx,
+        );
+        let root = self.tree.root().to_path_buf();
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let work = cx.background_executor().spawn({
+                let path = path.clone();
+                async move { fs::trash(&root, &path) }
+            });
+            let result = work.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    this.tree.forget(&path);
+                    // Reading the folder again moves the selection to a neighbor.
+                    this.load_dir(path.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
+                    cx.emit(FileEvent::Trashed { path });
+                }
+                Err(err) => {
+                    // Only a report: there is no answer to wait for.
+                    drop(window.prompt(
+                        PromptLevel::Critical,
+                        &format!("“{name}” could not be moved to the Trash"),
+                        Some(&err.to_string()),
+                        &["OK"],
+                        cx,
+                    ));
+                }
+            });
+        })
+        .detach();
     }
 
     /// Puts an input with `text` in the tree, `select` selected, and gives it focus.
@@ -934,6 +987,7 @@ impl Render for ProjectPanel {
             }))
             .on_action(cx.listener(|this, _: &NewFile, window, cx| this.new_file(window, cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
+            .on_action(cx.listener(|this, _: &Trash, window, cx| this.trash(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     let width = (event.event.position.x - event.bounds.left()).as_f32();
