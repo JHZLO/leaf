@@ -1,7 +1,7 @@
 //! Directory listings and text files, read and written the way the user left them.
 
 use std::{
-    io,
+    io::{self, Read as _},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -204,18 +204,53 @@ pub fn stamp(path: &Path) -> io::Result<FileStamp> {
     })
 }
 
+/// How far to look for a NUL byte to call a file binary (the same probe git uses).
+const BINARY_PROBE_BYTES: usize = 8 << 10;
+const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
+
+/// Reads a file for editing. Binary, non-UTF-8 and oversized files are refused. A UTF-8 BOM is
+/// stripped and `\r\n` becomes `\n`; both are remembered so saving writes them back.
 pub fn read_text(path: &Path) -> Result<TextFile, ReadError> {
-    let stamp = stamp(path)?;
+    let file = std::fs::File::open(path)?;
+    // The stamp comes from the same open file as the text, so it describes what was read.
+    let meta = file.metadata()?;
+    let stamp = FileStamp {
+        modified: meta.modified()?,
+        len: meta.len(),
+    };
     if stamp.len > MAX_OPEN_BYTES {
         return Err(ReadError::TooLarge(stamp.len));
     }
-    let bytes = std::fs::read(path)?;
+    let mut bytes = Vec::with_capacity(stamp.len as usize);
+    // The file may grow after the size check; never read past the limit.
+    file.take(MAX_OPEN_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_OPEN_BYTES {
+        return Err(ReadError::TooLarge(bytes.len() as u64));
+    }
+    if bytes[..bytes.len().min(BINARY_PROBE_BYTES)].contains(&0) {
+        return Err(ReadError::Binary);
+    }
+    let bom = bytes.starts_with(UTF8_BOM);
+    if bom {
+        bytes.drain(..UTF8_BOM.len());
+    }
     let text = String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8)?;
+    let line_ending = match text.find('\n') {
+        Some(i) if text[..i].ends_with('\r') => LineEnding::Crlf,
+        _ => LineEnding::Lf,
+    };
+    let crlf = text.matches("\r\n").count();
+    let mixed_line_endings = crlf > 0 && crlf < text.matches('\n').count();
+    let text = if crlf > 0 {
+        text.replace("\r\n", "\n")
+    } else {
+        text
+    };
     Ok(TextFile {
         text,
-        line_ending: LineEnding::Lf,
-        bom: false,
-        mixed_line_endings: false,
+        line_ending,
+        bom,
+        mixed_line_endings,
         stamp,
     })
 }
@@ -401,5 +436,112 @@ mod tests {
         // `a/to_b/to_a` is `a` again: an ancestor in the tree, though not on disk.
         let through = list_dir(root, Path::new("a/to_b")).unwrap();
         assert!(entry(&through, "to_a").loops);
+    }
+
+    #[test]
+    fn reads_lf_text_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        write(&path, "one\ntwo\n");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.text, "one\ntwo\n");
+        assert_eq!(file.line_ending, LineEnding::Lf);
+        assert!(!file.bom);
+        assert!(!file.mixed_line_endings);
+        assert_eq!(file.stamp, stamp(&path).unwrap());
+    }
+
+    #[test]
+    fn reads_crlf_text_with_lf_inside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        write(&path, "one\r\ntwo\r\nthree");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.text, "one\ntwo\nthree");
+        assert_eq!(file.line_ending, LineEnding::Crlf);
+        assert!(!file.mixed_line_endings);
+    }
+
+    #[test]
+    fn text_without_a_newline_is_lf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        write(&path, "one line");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.text, "one line");
+        assert_eq!(file.line_ending, LineEnding::Lf);
+    }
+
+    #[test]
+    fn mixed_line_endings_take_the_first_and_are_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        write(&path, "one\ntwo\r\nthree\n");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.text, "one\ntwo\nthree\n");
+        assert_eq!(file.line_ending, LineEnding::Lf);
+        assert!(file.mixed_line_endings);
+
+        write(&path, "one\r\ntwo\n");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.line_ending, LineEnding::Crlf);
+        assert!(file.mixed_line_endings);
+    }
+
+    #[test]
+    fn strips_and_remembers_a_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        write(&path, "\u{feff}hello\r\n");
+        let file = read_text(&path).unwrap();
+        assert_eq!(file.text, "hello\n");
+        assert!(file.bom);
+        assert_eq!(file.line_ending, LineEnding::Crlf);
+    }
+
+    #[test]
+    fn a_nul_in_the_first_8_kib_means_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.bin");
+        std::fs::write(&path, b"PK\x03\x04\x00\x00").unwrap();
+        assert!(matches!(read_text(&path), Err(ReadError::Binary)));
+
+        let mut late = vec![b'a'; BINARY_PROBE_BYTES];
+        late.push(0);
+        std::fs::write(&path, &late).unwrap();
+        assert_eq!(read_text(&path).unwrap().text.len(), BINARY_PROBE_BYTES + 1);
+    }
+
+    #[test]
+    fn refuses_text_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("latin1.txt");
+        std::fs::write(&path, b"caf\xe9\n").unwrap();
+        assert!(matches!(read_text(&path), Err(ReadError::NotUtf8)));
+    }
+
+    #[test]
+    fn refuses_files_over_the_open_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.log");
+        // A sparse file: the size is real, the disk use is not.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_OPEN_BYTES + 1).unwrap();
+        assert!(matches!(
+            read_text(&path),
+            Err(ReadError::TooLarge(len)) if len == MAX_OPEN_BYTES + 1
+        ));
+        file.set_len(MAX_OPEN_BYTES).unwrap();
+        // Exactly at the limit still opens (and the zeros make it binary, not too large).
+        assert!(matches!(read_text(&path), Err(ReadError::Binary)));
+    }
+
+    #[test]
+    fn a_missing_file_is_an_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_text(&dir.path().join("gone.md")),
+            Err(ReadError::Io(err)) if err.kind() == io::ErrorKind::NotFound
+        ));
     }
 }
