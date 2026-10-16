@@ -33,13 +33,14 @@ pub fn navigate(rows: &[Row], selected: Option<&Path>, key: NavKey) -> NavOutcom
     let current = selected.and_then(|s| rows.iter().position(|r| r.path == s));
     let last = rows.len() - 1;
     let target = match (key, current) {
-        (NavKey::Down, None) | (NavKey::First, _) => Some(0),
-        (NavKey::Up, None) | (NavKey::Last, _) => Some(last),
+        // With nothing selected, the downward keys start at the top and the upward ones at the
+        // bottom, so the first press always lands where that key points.
+        (NavKey::Down | NavKey::PageDown(_), None) | (NavKey::First, _) => Some(0),
+        (NavKey::Up | NavKey::PageUp(_), None) | (NavKey::Last, _) => Some(last),
         (NavKey::Down, Some(i)) => Some((i + 1).min(last)),
         (NavKey::Up, Some(i)) => Some(i.saturating_sub(1)),
         (NavKey::PageDown(n), Some(i)) => Some((i + n).min(last)),
         (NavKey::PageUp(n), Some(i)) => Some(i.saturating_sub(n)),
-        (NavKey::PageDown(_), None) | (NavKey::PageUp(_), None) => Some(0),
         (NavKey::Right, Some(i)) => {
             let row = &rows[i];
             if row.kind == EntryKind::Dir && !row.expanded && !row.loops {
@@ -136,6 +137,7 @@ mod tests {
         assert_eq!(nav(None, NavKey::First), select("docs"));
         assert_eq!(nav(None, NavKey::Last), select("top.md"));
         assert_eq!(nav(None, NavKey::PageDown(3)), select("docs"));
+        assert_eq!(nav(None, NavKey::PageUp(3)), select("top.md"));
         assert_eq!(nav(None, NavKey::Right), nothing());
         assert_eq!(nav(None, NavKey::Left), nothing());
     }
