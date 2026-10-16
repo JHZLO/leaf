@@ -82,6 +82,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-n", NewFile, panel),
         KeyBinding::new("shift-f6", Rename, panel),
         KeyBinding::new("cmd-backspace", Trash, panel),
+        // The recent folders on the empty window.
+        KeyBinding::new("up", SelectPrev, Some("Workspace && empty")),
+        KeyBinding::new("down", SelectNext, Some("Workspace && empty")),
+        KeyBinding::new("enter", Open, Some("Workspace && empty")),
         // Markdown editing keys (Phase 2) go below this line, in their own block.
     ]);
 }

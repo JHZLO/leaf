@@ -21,6 +21,18 @@ pub struct Session {
     /// UI zoom in percent; 0 means the default (100).
     pub zoom: u32,
     pub hide_key_hints: bool,
+    /// Folders opened before, newest first.
+    pub recent: Vec<PathBuf>,
+}
+
+/// How many folders the recent list keeps.
+pub const MAX_RECENT: usize = 8;
+
+/// Puts `root` first in `recent`, without duplicates, keeping at most [`MAX_RECENT`].
+pub fn remember(recent: &mut Vec<PathBuf>, root: PathBuf) {
+    recent.retain(|r| *r != root);
+    recent.insert(0, root);
+    recent.truncate(MAX_RECENT);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -65,6 +77,26 @@ pub fn save(path: &Path, session: &Session) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn remember_puts_the_folder_first_without_duplicates() {
+        let mut recent: Vec<PathBuf> = (0..MAX_RECENT)
+            .map(|i| PathBuf::from(format!("/f{i}")))
+            .collect();
+        remember(&mut recent, PathBuf::from("/f3"));
+        assert_eq!(recent[0], PathBuf::from("/f3"));
+        assert_eq!(recent.len(), MAX_RECENT);
+        assert_eq!(
+            recent
+                .iter()
+                .filter(|r| r.as_path() == Path::new("/f3"))
+                .count(),
+            1
+        );
+        remember(&mut recent, PathBuf::from("/new"));
+        assert_eq!(recent[0], PathBuf::from("/new"));
+        assert_eq!(recent.len(), MAX_RECENT);
+    }
+
     fn sample() -> Session {
         Session {
             root: Some(PathBuf::from("/Users/me/notes")),
@@ -87,6 +119,7 @@ mod tests {
             preview: true,
             zoom: 125,
             hide_key_hints: true,
+            recent: vec![PathBuf::from("/Users/me/notes")],
         }
     }
 

@@ -1,6 +1,9 @@
 //! What a window shows before a folder is open (design doc 5.8).
 
-use gpui_kit::*;
+use std::path::PathBuf;
+
+use gpui_kit::{prelude::FluentBuilder as _, *};
+use leaf_project::paths;
 
 use crate::{
     keymap::OpenFolder,
@@ -48,6 +51,68 @@ pub fn leaf_mark(size: Pixels, fill: Hsla, stroke: Hsla) -> impl IntoElement {
     .size(size)
 }
 
+/// The recent folders: name, then where it lives; Up/Down choose, Enter or a click opens.
+fn recent_list(
+    recent: &[PathBuf],
+    selected: usize,
+    on_open: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let p = theme::colors(cx);
+    div()
+        .mt(z(18., cx))
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .px(z(10., cx))
+                .pb(z(6., cx))
+                .text_size(z(12., cx))
+                .text_color(c(p.sub))
+                .child("Recent"),
+        )
+        .children(
+            recent
+                .iter()
+                .take(SHOWN_RECENT)
+                .enumerate()
+                .map(|(i, root)| {
+                    let chosen = i == selected;
+                    let name = root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let place = root.parent().map(paths::tilde).unwrap_or_default();
+                    let on_open = on_open.clone();
+                    div()
+                        .id(("recent", i))
+                        .h(z(28., cx))
+                        .px(z(10., cx))
+                        .flex()
+                        .items_center()
+                        .gap(z(8., cx))
+                        .rounded(z(4., cx))
+                        .text_size(z(13., cx))
+                        .text_color(c(if chosen { p.sel_ink } else { p.ink }))
+                        .when(chosen, |el| el.bg(c(p.sel_bg)))
+                        .when(!chosen, |el| el.hover(|style| style.bg(c(p.hover))))
+                        .child(div().flex_none().child(name))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(z(12., cx))
+                                .text_color(c(if chosen { p.sel_ink } else { p.sub }))
+                                .child(place),
+                        )
+                        .on_click(move |_, window, cx| on_open(i, window, cx))
+                }),
+        )
+}
+
 fn keycap(key: &'static str, cx: &App) -> impl IntoElement {
     let p = theme::colors(cx);
     div()
@@ -61,7 +126,17 @@ fn keycap(key: &'static str, cx: &App) -> impl IntoElement {
         .child(key)
 }
 
-pub fn render(cx: &App) -> impl IntoElement {
+/// How many recent folders the empty window lists.
+pub const SHOWN_RECENT: usize = 5;
+
+/// `recent` are folders opened before (newest first); `selected` is the keyboard choice among them;
+/// `on_open` opens the one at an index.
+pub fn render(
+    recent: &[PathBuf],
+    selected: usize,
+    on_open: impl Fn(usize, &mut Window, &mut App) + Clone + 'static,
+    cx: &App,
+) -> impl IntoElement {
     let p = theme::colors(cx);
     let hint = |key: &'static str, label: &'static str| {
         div()
@@ -123,6 +198,9 @@ pub fn render(cx: &App) -> impl IntoElement {
                         .child(keycap("⌘O", cx))
                         .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenFolder), cx)),
                 )
+                .when(!recent.is_empty(), |el| {
+                    el.child(recent_list(recent, selected, on_open, cx))
+                })
                 .child(
                     div()
                         .mt(z(22., cx))

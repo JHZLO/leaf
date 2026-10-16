@@ -12,8 +12,9 @@ use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
     empty_state,
     keymap::{
-        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, OpenFolder, PrevTab,
-        Quit, RevealInFinder, Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, Open, OpenFolder,
+        PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, TogglePreview, WORKSPACE,
+        ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{PanelEvent, ProjectPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
@@ -38,6 +39,9 @@ pub struct Workspace {
     _watcher: Option<watch::Watcher>,
     /// Writes the session a moment after the last change.
     save_task: Task<()>,
+    /// Folders opened before, newest first; the empty window offers them.
+    recent: Vec<PathBuf>,
+    recent_selected: usize,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -107,6 +111,9 @@ impl Workspace {
             })
             .unwrap_or(true)
         });
+        // With no folder open, the window itself takes the keys (recent folders).
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
         Self {
             panel: None,
             tabs,
@@ -115,8 +122,35 @@ impl Workspace {
             copy_seq: 0,
             _watcher: None,
             save_task: Task::ready(()),
-            focus_handle: cx.focus_handle(),
+            recent: session::load(&session::default_path()).recent,
+            recent_selected: 0,
+            focus_handle,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Recent folders that still exist, as the empty window lists them.
+    fn recent_shown(&self) -> Vec<PathBuf> {
+        self.recent
+            .iter()
+            .filter(|r| r.is_dir())
+            .take(empty_state::SHOWN_RECENT)
+            .cloned()
+            .collect()
+    }
+
+    fn open_recent(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(root) = self.recent_shown().get(index).cloned() {
+            self.set_root(root, window, cx);
+        }
+    }
+
+    fn move_recent(&mut self, step: isize, cx: &mut Context<Self>) {
+        let count = self.recent_shown().len();
+        if count > 0 {
+            self.recent_selected =
+                (self.recent_selected as isize + step).clamp(0, count as isize - 1) as usize;
+            cx.notify();
         }
     }
 
@@ -146,6 +180,8 @@ impl Workspace {
             .push(cx.observe(&panel, |this, _, cx| this.schedule_save(cx)));
         panel.read(cx).focus_handle(cx).focus(window, cx);
         self.panel = Some(panel.clone());
+        session::remember(&mut self.recent, root.clone());
+        self.recent_selected = 0;
         self.watch(&root, window, cx);
         // The same folder as last time comes back as it was left.
         let saved = session::load(&session::default_path());
@@ -247,6 +283,7 @@ impl Workspace {
         let tabs = self.tabs.read(cx);
         (saved.tabs, saved.active_tab) = tabs.session_tabs(cx);
         saved.preview = tabs.preview_open();
+        saved.recent = self.recent.clone();
         saved
     }
 
@@ -283,7 +320,8 @@ impl Workspace {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
     }
 
-    fn root(&self, cx: &App) -> Option<PathBuf> {
+    /// The open folder, if any.
+    pub fn root(&self, cx: &App) -> Option<PathBuf> {
         self.panel.as_ref().map(|p| p.read(cx).root().to_path_buf())
     }
 
@@ -474,7 +512,11 @@ impl Render for Workspace {
         let copied = self.copied.clone();
 
         div()
-            .key_context(WORKSPACE)
+            .key_context(if self.panel.is_some() {
+                WORKSPACE
+            } else {
+                "Workspace empty"
+            })
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::focus_tree))
@@ -483,6 +525,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::reveal_in_finder))
+            .when(self.panel.is_none(), |el| {
+                el.on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_recent(-1, cx)))
+                    .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_recent(1, cx)))
+                    .on_action(cx.listener(|this, _: &Open, window, cx| {
+                        this.open_recent(this.recent_selected, window, cx)
+                    }))
+            })
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 // Without unsaved changes the app-wide handler quits.
@@ -522,7 +571,18 @@ impl Render for Workspace {
                     )
                     .map(|el| match self.panel {
                         Some(_) => el.child(self.tabs.clone()),
-                        None => el.child(empty_state::render(cx)),
+                        None => {
+                            let this = cx.entity().downgrade();
+                            el.child(empty_state::render(
+                                &self.recent_shown(),
+                                self.recent_selected,
+                                move |index, window, cx| {
+                                    let _ = this
+                                        .update(cx, |this, cx| this.open_recent(index, window, cx));
+                                },
+                                cx,
+                            ))
+                        }
                     }),
             )
             .child(status_bar::render(

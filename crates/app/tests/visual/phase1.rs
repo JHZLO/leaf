@@ -1,6 +1,6 @@
 //! Phase 1: walk the tree, copy paths, leaf through, the preview, a code file, zoom, the empty window.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use gpui_kit::component::{Theme, ThemeMode};
 
@@ -70,6 +70,15 @@ pub fn run(check: &mut Check) {
     check
         .cx
         .update(|cx| Theme::change(ThemeMode::Dark, None, cx));
+    // The first window's folder is saved as recent; the empty window offers it and Enter opens it.
+    check.cx.advance_clock(Duration::from_secs(2));
     let empty = check.open(None);
     check.shot(empty, "6-empty-dark");
+    check.keys(empty, "enter");
+    let root = check.workspace(empty, |w, cx| w.root(cx));
+    check.expect_eq(
+        "enter opens the recent folder",
+        root,
+        Some(fixture.path().canonicalize().expect("root")),
+    );
 }

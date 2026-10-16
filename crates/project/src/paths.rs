@@ -10,6 +10,19 @@ pub fn display_name(name: &OsStr) -> String {
     name.to_string_lossy().nfc().collect()
 }
 
+/// `path` with the home folder written as `~`, the way a shell prompt shows it.
+pub fn tilde(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    match home
+        .as_deref()
+        .and_then(|home| path.strip_prefix(home).ok())
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 /// `root` joined with `rel`, as one NFC string.
 pub fn absolute(root: &Path, rel: &Path) -> String {
     root.join(rel).to_string_lossy().nfc().collect()
