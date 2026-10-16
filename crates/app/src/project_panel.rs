@@ -25,6 +25,12 @@ const ROW_GAP: f32 = 4.;
 const CHEVRON_SLOT: f32 = 12.;
 const CHEVRON_SIZE: f32 = 10.;
 
+/// Key hint line spacing at 100% zoom.
+const HINT_PADDING: f32 = 8.;
+const HINT_GAP: f32 = 8.;
+const HINT_KEY_GAP: f32 = 4.;
+const KEY_CAP_PADDING: f32 = 3.;
+
 /// The mockup's chevron. Inline bytes keep the tree independent of a registered icon bundle.
 const CHEVRON: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><path d="M3.5 2 L7 5 L3.5 8" fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 
@@ -371,26 +377,34 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
             ("⌘⇧C", "Copy path"),
         ],
     };
+    // Tighter than the mockup (12 / 12 / 5 / 5): at the default width the file hints need every
+    // point. A hint that still does not fit wraps onto a hidden second line instead of being cut.
     div()
         .h(z(size::KEY_HINTS, cx))
         .flex_none()
         .flex()
-        .items_center()
-        .gap_3()
-        .px_3()
+        .flex_wrap()
+        .gap_x(z(HINT_GAP, cx))
+        .px(z(HINT_PADDING, cx))
+        .overflow_hidden()
+        .whitespace_nowrap()
         .border_t_1()
         .border_color(c(p.line))
         .text_size(z(11.5, cx))
         .text_color(c(p.sub))
         .children(keys.into_iter().map(|(key, label)| {
             div()
+                .h_full()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap(z(HINT_KEY_GAP, cx))
                 .child(
                     div()
-                        .px_1()
-                        .rounded(px(4.))
+                        .h(z(17., cx))
+                        .flex()
+                        .items_center()
+                        .px(z(KEY_CAP_PADDING, cx))
+                        .rounded(z(4., cx))
                         .border_1()
                         .border_color(c(p.line))
                         .bg(c(p.paper))
