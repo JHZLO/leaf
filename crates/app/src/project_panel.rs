@@ -469,23 +469,32 @@ impl Render for ProjectPanel {
     }
 }
 
-fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
-    let p = theme::colors(cx);
-    let keys: [(&str, &str); 3] = match selected {
-        Some(row) if row.kind == EntryKind::Dir && row.expanded => [
+/// The keys the hint line offers for the selection, as (key, label).
+fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] {
+    match selected {
+        Some(row) if row.kind == EntryKind::Dir && row.expanded => &[
             ("←", "Collapse"),
             ("→", "First child"),
             ("⌘⇧C", "Copy path"),
         ],
-        Some(row) if row.kind == EntryKind::Dir => {
-            [("→", "Expand"), ("←", "Parent"), ("⌘⇧C", "Copy path")]
+        // A folder that leads back up never opens, so offering Expand would be a lie.
+        Some(row) if row.kind == EntryKind::Dir && row.loops => {
+            &[("←", "Parent"), ("⌘⇧C", "Copy path")]
         }
-        _ => [
+        Some(row) if row.kind == EntryKind::Dir => {
+            &[("→", "Expand"), ("←", "Parent"), ("⌘⇧C", "Copy path")]
+        }
+        _ => &[
             ("↩", "Open"),
             ("Space", "Leaf through"),
             ("⌘⇧C", "Copy path"),
         ],
-    };
+    }
+}
+
+fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
+    let p = theme::colors(cx);
+    let keys = hint_keys(selected);
     // Tighter than the mockup (12 / 12 / 5 / 5): at the default width the file hints need every
     // point. A hint that still does not fit wraps onto a hidden second line instead of being cut.
     div()
@@ -501,7 +510,7 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
         .border_color(c(p.line))
         .text_size(z(11.5, cx))
         .text_color(c(p.sub))
-        .children(keys.into_iter().map(|(key, label)| {
+        .children(keys.iter().map(|&(key, label)| {
             div()
                 .h_full()
                 .flex()
@@ -527,9 +536,38 @@ fn key_hints(selected: Option<&Row>, cx: &App) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    use super::{CHEVRON_SLOT, clamp_width, guide_x, row_padding, rows_per_page, tilde};
+    use leaf_project::{fs::EntryKind, tree::Row};
+
+    use super::{CHEVRON_SLOT, clamp_width, guide_x, hint_keys, row_padding, rows_per_page, tilde};
+
+    fn folder(expanded: bool, loops: bool) -> Row {
+        Row {
+            path: PathBuf::from("self"),
+            name: "self".into(),
+            depth: 0,
+            kind: EntryKind::Dir,
+            expanded,
+            ignored: false,
+            loops,
+            guides: Vec::new(),
+        }
+    }
+
+    fn labels(row: Option<&Row>) -> Vec<&'static str> {
+        hint_keys(row).iter().map(|&(_, label)| label).collect()
+    }
+
+    #[test]
+    fn a_folder_that_loops_offers_no_expand() {
+        assert_eq!(
+            labels(Some(&folder(false, false))),
+            ["Expand", "Parent", "Copy path"]
+        );
+        assert_eq!(labels(Some(&folder(false, true))), ["Parent", "Copy path"]);
+        assert_eq!(labels(None), ["Open", "Leaf through", "Copy path"]);
+    }
 
     #[test]
     fn guides_follow_the_design_formula() {
