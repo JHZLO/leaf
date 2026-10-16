@@ -7,7 +7,7 @@ use gpui_kit::component::{
     input::{Editor, EditorState, InputEvent, RopeExt as _},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES};
+use leaf_project::fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile};
 
 use crate::{
     preview::Preview,
@@ -38,10 +38,19 @@ impl Tab {
 /// Something the workspace shows (title, stem, status) may have changed.
 pub struct TabsChanged;
 
+/// A file being read on the background executor for [`EditorTabs::open`].
+struct PendingOpen {
+    id: u64,
+    path: PathBuf,
+    leaf_through: bool,
+}
+
 pub struct EditorTabs {
     root: PathBuf,
     tabs: Vec<Tab>,
     active: Option<usize>,
+    pending: Vec<PendingOpen>,
+    next_open: u64,
     preview: Option<Entity<Preview>>,
     focus_handle: FocusHandle,
     /// The last file that could not be opened, and why; shown in the status bar.
@@ -81,6 +90,8 @@ impl EditorTabs {
             root,
             tabs: Vec::new(),
             active: None,
+            pending: Vec::new(),
+            next_open: 0,
             preview: None,
             focus_handle: cx.focus_handle(),
             error: None,
@@ -114,6 +125,7 @@ impl EditorTabs {
     }
 
     /// Opens `path` (relative to the open folder), or switches to it when it is already open.
+    /// The file is read off the main thread; the tab appears when it has been read.
     pub fn open(
         &mut self,
         path: &Path,
@@ -128,7 +140,50 @@ impl EditorTabs {
             self.activate(index, window, cx);
             return;
         }
-        let file = match fs::read_text(&self.root.join(path)) {
+        if let Some(pending) = self.pending.iter_mut().find(|p| p.path == path) {
+            // Already being read; Enter on a file still loading from Space makes it a normal tab.
+            pending.leaf_through &= leaf_through;
+            return;
+        }
+        if leaf_through {
+            // Walking the tree with Space, only the newest file is worth showing.
+            self.pending.retain(|p| !p.leaf_through);
+        }
+        let id = self.next_open;
+        self.next_open += 1;
+        self.pending.push(PendingOpen {
+            id,
+            path: path.to_path_buf(),
+            leaf_through,
+        });
+        let abs = self.root.join(path);
+        let read = cx
+            .background_executor()
+            .spawn(async move { fs::read_text(&abs) });
+        cx.spawn_in(window, async move |this, cx| {
+            let file = read.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_open(id, file, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    fn finish_open(
+        &mut self,
+        id: u64,
+        file: Result<TextFile, ReadError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A newer leaf-through may have replaced this request while the file was read.
+        let Some(ix) = self.pending.iter().position(|p| p.id == id) else {
+            return;
+        };
+        let PendingOpen {
+            path, leaf_through, ..
+        } = self.pending.remove(ix);
+        let file = match file {
             Ok(file) => file,
             Err(err) => {
                 self.error = Some(format!("{}: {err}", path.display()));
@@ -138,44 +193,7 @@ impl EditorTabs {
             }
         };
         self.error = None;
-        let mut language = language_for(path);
-        if file.stamp.len > MAX_HIGHLIGHT_BYTES {
-            language = "text".into();
-        }
-        let markdown = language == "markdown";
-        let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(language.clone())
-                .line_number(true)
-                .soft_wrap(markdown)
-                .default_value(file.text)
-        });
-        let subscriptions = vec![
-            cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    if let Some(tab) = this.tabs.iter_mut().find(|t| t.editor == editor) {
-                        tab.dirty = true;
-                        tab.leaf_through = false;
-                    }
-                    this.refresh_preview(cx);
-                    cx.emit(TabsChanged);
-                    cx.notify();
-                }
-            }),
-            cx.observe(&editor, |_, _, cx| cx.emit(TabsChanged)),
-        ];
-        let tab = Tab {
-            path: path.to_path_buf(),
-            editor,
-            leaf_through,
-            dirty: false,
-            read_only: file.mixed_line_endings,
-            line_ending: file.line_ending,
-            bom: file.bom,
-            stamp: file.stamp,
-            language,
-            _subscriptions: subscriptions,
-        };
+        let tab = self.new_tab(path, leaf_through, file, window, cx);
         // A new leaf-through replaces the previous one in place.
         let index = match self.tabs.iter().position(|t| t.leaf_through) {
             Some(i) if leaf_through => {
@@ -190,9 +208,65 @@ impl EditorTabs {
         self.activate(index, window, cx);
     }
 
+    fn new_tab(
+        &mut self,
+        path: PathBuf,
+        leaf_through: bool,
+        file: TextFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        let mut language = language_for(&path);
+        if file.stamp.len > MAX_HIGHLIGHT_BYTES {
+            language = "text".into();
+        }
+        let markdown = language == "markdown";
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language(language.clone())
+                .line_number(true)
+                .soft_wrap(markdown)
+                .default_value(file.text)
+        });
+        let subscriptions = vec![
+            cx.subscribe(&editor, |this, editor, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.edited(&editor, cx);
+                }
+            }),
+            cx.observe(&editor, |_, _, cx| cx.emit(TabsChanged)),
+        ];
+        Tab {
+            path,
+            editor,
+            leaf_through,
+            dirty: false,
+            read_only: file.mixed_line_endings,
+            line_ending: file.line_ending,
+            bom: file.bom,
+            stamp: file.stamp,
+            language,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn edited(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| &t.editor == editor) {
+            tab.dirty = true;
+            tab.leaf_through = false;
+        }
+        self.refresh_preview(cx);
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        // Focus follows the switch only when it was already in the editor, so Space in the tree keeps it there.
+        let had_focus = self.focus_handle.contains_focused(window, cx);
         self.active = Some(index);
-        let _ = window;
+        if had_focus {
+            self.focus_active(window, cx);
+        }
         self.refresh_preview(cx);
         cx.emit(TabsChanged);
         cx.notify();
@@ -382,6 +456,7 @@ impl Render for EditorTabs {
             Some(tab) => {
                 let editor = Editor::new(&tab.editor)
                     .bordered(false)
+                    .readonly(tab.read_only)
                     .h_full()
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(z(size::EDITOR_TEXT, cx));
