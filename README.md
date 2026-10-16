@@ -1,3 +1,5 @@
+<img src="assets/brand/mark.svg" width="72" alt="">
+
 # leaf
 
 A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust.

@@ -7,23 +7,41 @@ use crate::{
     theme::{self, c, z},
 };
 
-/// The leaf mark: a leaf outline with its midrib, drawn in `color` on a 48-unit grid.
-pub fn leaf_mark(size: Pixels, color: Hsla) -> impl IntoElement {
+/// The leaf mark (assets/brand/mark.svg): a leaf whose veins are the tree's bent guides.
+/// Below 24 px the side veins would blur, so only the midrib stays (mark-small.svg).
+pub fn leaf_mark(size: Pixels, fill: Hsla, stroke: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let unit = bounds.size.width / 48.;
+            let unit = bounds.size.width / 100.;
+            let small = bounds.size.width < px(24.);
+            let width = unit * if small { 7. } else { 4.5 };
             let at = |x: f32, y: f32| point(bounds.origin.x + unit * x, bounds.origin.y + unit * y);
-            let mut outline = PathBuilder::stroke(unit * 2.2);
-            outline.move_to(at(12., 36.));
-            outline.cubic_bezier_to(at(38., 10.), at(12., 20.), at(22., 10.));
-            outline.cubic_bezier_to(at(12., 36.), at(38., 26.), at(28., 36.));
-            outline.close();
-            let mut midrib = PathBuilder::stroke(unit * 2.2);
-            midrib.move_to(at(12., 36.));
-            midrib.line_to(at(28., 20.));
-            for path in [outline.build(), midrib.build()].into_iter().flatten() {
-                window.paint_path(path, color);
+            let blade = |mut path: PathBuilder| {
+                path.move_to(at(50., 14.));
+                path.cubic_bezier_to(at(64., 74.), at(72., 30.), at(78., 54.));
+                path.cubic_bezier_to(at(36., 74.), at(58., 82.), at(42., 82.));
+                path.cubic_bezier_to(at(50., 14.), at(22., 54.), at(28., 30.));
+                path.close();
+                path
+            };
+            let mut veins = PathBuilder::stroke(width);
+            veins.move_to(at(50., if small { 30. } else { 26. }));
+            veins.line_to(at(50., 88.));
+            if !small {
+                for (y, x) in [(38., 59.), (52., 41.), (64., 58.)] {
+                    veins.move_to(at(50., y));
+                    veins.line_to(at(x, y));
+                }
+            }
+            if let Ok(path) = blade(PathBuilder::fill()).build() {
+                window.paint_path(path, fill);
+            }
+            for path in [blade(PathBuilder::stroke(width)).build(), veins.build()]
+                .into_iter()
+                .flatten()
+            {
+                window.paint_path(path, stroke);
             }
         },
     )
@@ -72,7 +90,7 @@ pub fn render(cx: &App) -> impl IntoElement {
                 .flex_col()
                 .items_center()
                 .gap(z(12., cx))
-                .child(leaf_mark(z(48., cx), c(p.accent)))
+                .child(leaf_mark(z(48., cx), c(p.sel_bg), c(p.accent)))
                 .child(
                     div()
                         .text_size(z(22., cx))
