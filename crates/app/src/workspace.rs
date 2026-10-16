@@ -272,6 +272,12 @@ impl Workspace {
             .map(Path::to_path_buf)
     }
 
+    /// The active tab's text as the editor holds it (tests read it to check editing keys).
+    pub fn active_text(&self, cx: &App) -> Option<String> {
+        let tabs = self.tabs.read(cx);
+        Some(tabs.active_tab()?.editor.read(cx).value().to_string())
+    }
+
     /// The active tab's file, relative to the open folder.
     pub fn active_file(&self, cx: &App) -> Option<PathBuf> {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
