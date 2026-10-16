@@ -851,8 +851,10 @@ fn folded_corner(size: Pixels, color: Hsla) -> impl IntoElement {
 impl Render for EditorTabs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
+        // In a column under the banner, so it takes the height left rather than all of it.
+        let body = div().flex_1().min_h_0();
         let body = match self.active_tab() {
-            None => div().flex_1().bg(c(p.paper)).into_any_element(),
+            None => body.bg(c(p.paper)),
             Some(tab) => {
                 let editor = Editor::new(&tab.editor)
                     .bordered(false)
@@ -861,33 +863,25 @@ impl Render for EditorTabs {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(z(size::EDITOR_TEXT, cx));
                 if tab.is_markdown() {
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .flex()
+                    // The paper sheet: a reading-width page on the desk, keeping 20 px of desk on each
+                    // side when the pane is narrower than the page.
+                    body.flex()
                         .justify_center()
-                        .px_5()
+                        .px(z(20., cx))
                         .bg(c(p.desk))
                         .child(
                             div()
                                 .w_full()
                                 .max_w(z(size::SHEET, cx))
                                 .h_full()
+                                .py(z(20., cx))
                                 .bg(c(p.paper))
                                 .border_x_1()
                                 .border_color(c(p.line))
                                 .child(editor),
                         )
-                        .into_any_element()
                 } else {
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .bg(c(p.paper))
-                        .child(editor)
-                        .into_any_element()
+                    body.bg(c(p.paper)).child(editor)
                 }
             }
         };
