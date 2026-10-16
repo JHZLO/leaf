@@ -1,12 +1,21 @@
 //! The Markdown preview beside the editor (Cmd+Shift+V).
 
-use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
+use std::{
+    cell::Cell,
+    ops::Range,
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::Duration,
+};
 
 use gpui_kit::base::{TextView, TextViewStyle};
 use gpui_kit::component::{
     ActiveTheme as _,
     input::EditorState,
-    text::{RenderedText, TextViewState},
+    text::{
+        MarkdownExtensions, MarkdownNode, MarkdownParseContext, RenderedText, TextViewState,
+        markdown_ast::Node,
+    },
 };
 use gpui_kit::{TestSupportExt as _, prelude::FluentBuilder as _, *};
 
@@ -20,11 +29,16 @@ const BODY: f32 = 14.;
 const TOP: f32 = 26.;
 /// Frames a reveal may take to report its line before the preview stops waiting for it.
 const REVEAL_FRAMES: u8 = 2;
+/// The custom block of an image on disk, see [`local_image`].
+const LOCAL_IMAGE: &str = "leaf-local-image";
 
 pub struct Preview {
     state: Entity<TextViewState>,
     /// The Markdown editor shown; none when the active tab is not Markdown.
     source: Option<Entity<EditorState>>,
+    /// The shown file's folder, where relative image paths start.
+    folder: Option<PathBuf>,
+    extensions: MarkdownExtensions,
     task: Task<()>,
     scroll: ScrollHandle,
     /// The editor's top visible line, which the preview keeps at its own top.
@@ -69,6 +83,8 @@ impl Preview {
         Self {
             state,
             source: None,
+            folder: None,
+            extensions: extensions(None),
             task: Task::ready(()),
             scroll: ScrollHandle::new(),
             top_line: None,
@@ -80,6 +96,22 @@ impl Preview {
 
     /// Shows `source` now, dropping a pending update.
     pub fn show(&mut self, source: Option<Entity<EditorState>>, cx: &mut Context<Self>) {
+        self.show_in(source, None, cx);
+    }
+
+    /// Shows `source`, a file in `folder`, now, dropping a pending update. Images with a relative
+    /// path load from `folder`; without one only absolute paths do.
+    pub fn show_in(
+        &mut self,
+        source: Option<Entity<EditorState>>,
+        folder: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.folder != folder {
+            // Only the renderer reads the folder, so the document is not parsed again.
+            self.extensions = extensions(folder.clone());
+            self.folder = folder;
+        }
         self.task = Task::ready(());
         if self.source != source {
             self.top_line = None;
@@ -176,6 +208,7 @@ impl Preview {
         let top = z(TOP, cx);
         TextView::new(&self.state)
             .style(preview_style(p, cx))
+            .markdown_extensions(self.extensions.clone())
             // Called while the revealed line is off screen; it lands at once, no animation.
             .on_reveal(move |line, window, _| {
                 let Some(Reveal { edge, .. }) = reveal.take() else {
@@ -232,6 +265,119 @@ fn line_range(text: &str, line: usize) -> Option<Range<usize>> {
     };
     let end = text[start..].find('\n').map_or(text.len(), |i| start + i);
     Some(start..end)
+}
+
+/// gpui-kit fetches every image as a URL, so images on disk would not show, and one that fails to
+/// load leaves nothing behind. A paragraph that is only an image on disk becomes a custom block,
+/// drawn by [`image_block`]; web and data images keep gpui-kit's own handling.
+fn extensions(folder: Option<PathBuf>) -> MarkdownExtensions {
+    MarkdownExtensions::default()
+        .block_parser(local_image)
+        .block_renderer(LOCAL_IMAGE, move |node, _, cx| {
+            image_block(node, folder.as_deref(), cx)
+        })
+}
+
+/// What a [`LOCAL_IMAGE`] block carries.
+struct LocalImage {
+    url: String,
+    alt: SharedString,
+}
+
+/// Claims a paragraph holding nothing but an image on disk. Runs while the text view parses.
+fn local_image(node: &Node, cx: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+    let Node::Paragraph(paragraph) = node else {
+        return None;
+    };
+    let [Node::Image(image)] = paragraph.children.as_slice() else {
+        return None;
+    };
+    if !is_local(&image.url) {
+        return None;
+    }
+    let block = LocalImage {
+        url: image.url.clone(),
+        alt: image.alt.clone().into(),
+    };
+    // No text of its own, like gpui-kit's images, so copying the preview leaves it out.
+    Some(
+        MarkdownNode::new(LOCAL_IMAGE, block)
+            .markdown(cx.node_source(node).unwrap_or_default())
+            .accessibility_label(image.alt.clone()),
+    )
+}
+
+/// The image, read off the main thread by gpui, or its alt text in `sub` when it cannot be shown.
+fn image_block(node: &MarkdownNode, folder: Option<&Path>, cx: &App) -> AnyElement {
+    let Some(image) = node.data::<LocalImage>() else {
+        return div().into_any_element();
+    };
+    let sub = c(theme::colors(cx).sub);
+    let alt = if image.alt.is_empty() {
+        SharedString::from(image.url.clone())
+    } else {
+        image.alt.clone()
+    };
+    let missing = move || div().text_color(sub).child(alt.clone()).into_any_element();
+    match image_path(&image.url, folder) {
+        Some(path) => img(path)
+            .object_fit(ObjectFit::Contain)
+            .max_w(relative(1.))
+            .with_fallback(missing)
+            .into_any_element(),
+        None => missing(),
+    }
+}
+
+/// Whether an image URL names a file on disk (a path or a `file:` URL), not a web or data URL.
+fn is_local(url: &str) -> bool {
+    match url.split_once(':') {
+        Some((scheme, _)) if is_scheme(scheme) => scheme.eq_ignore_ascii_case("file"),
+        _ => !url.is_empty() && !url.starts_with("//"),
+    }
+}
+
+fn is_scheme(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The file a local image URL names: absolute as written, or relative to `folder`.
+fn image_path(url: &str, folder: Option<&Path>) -> Option<PathBuf> {
+    let path = url
+        .strip_prefix("file://")
+        .or_else(|| url.strip_prefix("file:"))
+        .unwrap_or(url);
+    let path = PathBuf::from(percent_decoded(path));
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        folder.map(|folder| folder.join(path))
+    }
+}
+
+/// `text` with `%XX` escapes decoded, as Markdown writes a space in a path (`my%20photo.png`).
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = text
+            .get(i + 1..i + 3)
+            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()));
+        match (bytes[i], hex) {
+            (b'%', Some(hex)) => {
+                out.push(u8::from_str_radix(hex, 16).unwrap_or_default());
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Lays out and paints its child as is, but can prepaint it under an empty content mask, which
@@ -404,7 +550,53 @@ impl Render for Preview {
 
 #[cfg(test)]
 mod tests {
-    use super::line_range;
+    use std::path::{Path, PathBuf};
+
+    use super::{image_path, is_local, line_range};
+
+    #[test]
+    fn local_images_are_paths_and_file_urls() {
+        for url in [
+            "pic.png",
+            "../img/pic.png",
+            "/abs/pic.png",
+            "file:///abs/pic.png",
+        ] {
+            assert!(is_local(url), "{url}");
+        }
+        for url in [
+            "https://example.com/pic.png",
+            "http://example.com/pic.png",
+            "data:image/png;base64,iVBORw0KGgo=",
+            "//example.com/pic.png",
+            "",
+        ] {
+            assert!(!is_local(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn image_paths_resolve_against_the_folder() {
+        let folder = Path::new("/notes/docs");
+        assert_eq!(
+            image_path("img/my%20pic.png", Some(folder)),
+            Some(PathBuf::from("/notes/docs/img/my pic.png"))
+        );
+        assert_eq!(
+            image_path("../pic.png", Some(folder)),
+            Some(PathBuf::from("/notes/docs/../pic.png"))
+        );
+        assert_eq!(
+            image_path("file:///abs/pic.png", None),
+            Some(PathBuf::from("/abs/pic.png"))
+        );
+        assert_eq!(
+            image_path("/abs/100%.png", None),
+            Some(PathBuf::from("/abs/100%.png"))
+        );
+        // Without the file's folder a relative path names nothing, and the alt text shows.
+        assert_eq!(image_path("pic.png", None), None);
+    }
 
     #[test]
     fn line_range_finds_each_line_without_its_break() {
