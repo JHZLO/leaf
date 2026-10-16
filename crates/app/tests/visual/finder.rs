@@ -1,5 +1,104 @@
 //! The file finder (Cmd+Shift+O).
 
-use crate::check::Check;
+use std::path::PathBuf;
 
-pub fn run(_check: &mut Check) {}
+use gpui_kit::{
+    component::{Theme, ThemeMode},
+    *,
+};
+
+use crate::check::{Check, fixture};
+
+/// The center of the finder's result row `row` at 100% zoom, in a 1280-wide window: below the
+/// title bar (38), the gap (8), the border (1), the query (34), its line (1) and the list padding (4).
+fn row_center(row: usize) -> Point<Pixels> {
+    point(
+        px(640.),
+        px(38. + 8. + 1. + 34. + 1. + 4. + 24. * row as f32 + 12.),
+    )
+}
+
+pub fn run(check: &mut Check) {
+    let fixture = fixture();
+    let window = check.open(Some(fixture.path()));
+
+    // An empty query lists the files in path order; gitignored target/ is left out.
+    check.keys(window, "cmd-shift-o");
+    check.shot(window, "finder-open");
+
+    // A few letters of a nested file pick it; Enter opens it and the editor takes the keys.
+    check.keys(window, "g p a t h");
+    check.shot(window, "finder-query");
+    check.keys(window, "enter");
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "finder opens docs/guide/paths.md",
+        active,
+        Some(PathBuf::from("docs/guide/paths.md")),
+    );
+    check.keys(window, "x");
+    let text = check.workspace(window, |w, cx| w.active_text(cx));
+    check.expect_eq(
+        "after the finder the editor has focus",
+        text.is_some_and(|t| t.starts_with("x# Copying paths")),
+        true,
+    );
+    check.keys(window, "cmd-z");
+
+    // Escape closes without opening anything and gives focus back to the editor.
+    check.keys(window, "cmd-shift-o n o t e s escape x");
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "escape opens nothing",
+        active,
+        Some(PathBuf::from("docs/guide/paths.md")),
+    );
+    let text = check.workspace(window, |w, cx| w.active_text(cx));
+    check.expect_eq(
+        "escape gives focus back to the editor",
+        text.is_some_and(|t| t.starts_with("x# Copying paths")),
+        true,
+    );
+    check.keys(window, "cmd-z");
+
+    // Opened from the tree, Cmd+Shift+O closes it again and the tree keeps walking.
+    check.keys(window, "cmd-1 down");
+    let before = check.workspace(window, |w, cx| w.tree_selection(cx));
+    check.expect_eq("the tree selects docs", before, Some(PathBuf::from("docs")));
+    check.keys(window, "cmd-shift-o r e a d cmd-shift-o down");
+    let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
+    check.expect_eq(
+        "cmd-shift-o gives focus back to the tree",
+        selected,
+        Some(PathBuf::from("src")),
+    );
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "closing with cmd-shift-o opens nothing",
+        active,
+        Some(PathBuf::from("docs/guide/paths.md")),
+    );
+
+    // A click on a result opens it: the second file in path order.
+    check.keys(window, "cmd-shift-o");
+    check
+        .cx
+        .simulate_click(window, row_center(1), Modifiers::default());
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "a click opens docs/guide/keys.md",
+        active,
+        Some(PathBuf::from("docs/guide/keys.md")),
+    );
+
+    // On light paper and zoomed: every size scales.
+    check
+        .cx
+        .update(|cx| Theme::change(ThemeMode::Light, None, cx));
+    check.keys(window, "cmd-= cmd-shift-o d m");
+    check.shot(window, "finder-light-zoomed");
+    check.keys(window, "escape cmd-0");
+    check
+        .cx
+        .update(|cx| Theme::change(ThemeMode::Dark, None, cx));
+}
