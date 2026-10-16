@@ -174,6 +174,20 @@ impl ProjectPanel {
         }
     }
 
+    /// A click selects; a folder toggles on the first click and a file opens on the second.
+    /// Folders ignore the second click so that a double click does not undo itself.
+    fn click_row(&mut self, path: PathBuf, kind: EntryKind, count: usize, cx: &mut Context<Self>) {
+        self.tree.select(Some(path));
+        let open = match kind {
+            EntryKind::Dir => count == 1,
+            EntryKind::File => count == 2,
+        };
+        if open {
+            self.open_selected(false, cx);
+        }
+        cx.notify();
+    }
+
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
     fn render_row(row: &Row, selected: bool, focused: bool, cx: &App) -> Stateful<Div> {
         let p = theme::colors(cx);
@@ -281,6 +295,12 @@ impl Render for ProjectPanel {
         div()
             .key_context(PROJECT_PANEL)
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.focus_handle.focus(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.apply(NavKey::Up, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.apply(NavKey::Down, cx)))
             .on_action(cx.listener(|this, _: &Expand, _, cx| this.apply(NavKey::Right, cx)))
@@ -337,16 +357,25 @@ impl Render for ProjectPanel {
                 uniform_list("project-tree", count, {
                     let rows = rows.clone();
                     let selected = selected.clone();
+                    let panel = cx.weak_entity();
                     move |range, _, cx| {
                         rows[range]
                             .iter()
                             .map(|row| {
+                                let (path, kind) = (row.path.clone(), row.kind);
+                                let panel = panel.clone();
                                 Self::render_row(
                                     row,
                                     selected.as_deref() == Some(row.path.as_path()),
                                     focused,
                                     cx,
                                 )
+                                .on_click(move |event, _, cx| {
+                                    let count = event.click_count();
+                                    let _ = panel.update(cx, |this, cx| {
+                                        this.click_row(path.clone(), kind, count, cx)
+                                    });
+                                })
                             })
                             .collect()
                     }
