@@ -96,7 +96,7 @@ pub fn c(value: u32) -> Hsla {
 /// Sizes at 100% zoom (the design doc's sizes table). Multiply by [`zoom`] before use.
 pub mod size {
     pub const TITLE_BAR: f32 = 38.;
-    pub const TREE_WIDTH: f32 = 264.;
+    pub const TREE_WIDTH: f32 = 300.;
     pub const TREE_HEAD: f32 = 32.;
     pub const TREE_ROW: f32 = 22.;
     pub const TREE_INDENT: f32 = 14.;
