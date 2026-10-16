@@ -291,7 +291,11 @@ impl EditorTabs {
             tab.leaf_through = false;
             tab.edits += 1;
         }
-        self.refresh_preview(cx);
+        if let Some(preview) = self.preview.clone()
+            && self.preview_source().as_ref() == Some(editor)
+        {
+            preview.update(cx, |preview, cx| preview.schedule(cx));
+        }
         cx.emit(TabsChanged);
         cx.notify();
     }
@@ -725,23 +729,26 @@ impl EditorTabs {
 
     pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {
         if self.preview.take().is_none() {
-            let source = self.preview_source(cx).unwrap_or_default();
-            self.preview = Some(cx.new(|cx| Preview::new(&source, cx)));
+            self.preview = Some(cx.new(Preview::new));
+            self.refresh_preview(cx);
         }
         cx.notify();
     }
 
-    fn preview_source(&self, cx: &App) -> Option<String> {
-        let tab = self.active_tab().filter(|t| t.is_markdown())?;
-        Some(tab.editor.read(cx).value().to_string())
+    /// The editor the preview shows: the active tab, when it is Markdown.
+    fn preview_source(&self) -> Option<Entity<EditorState>> {
+        self.active_tab()
+            .filter(|t| t.is_markdown())
+            .map(|t| t.editor.clone())
     }
 
+    /// Shows the active tab in the preview at once (switching tabs is not typing).
     fn refresh_preview(&mut self, cx: &mut Context<Self>) {
         let Some(preview) = self.preview.clone() else {
             return;
         };
-        let source = self.preview_source(cx).unwrap_or_default();
-        preview.update(cx, |preview, cx| preview.schedule(source, cx));
+        let source = self.preview_source();
+        preview.update(cx, |preview, cx| preview.show(source, cx));
     }
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
