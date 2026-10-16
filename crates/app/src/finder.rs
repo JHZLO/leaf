@@ -135,13 +135,14 @@ impl Finder {
         let folder = &path[..name_start.saturating_sub(1)];
         let name = &path[name_start..];
         let (folder_marks, name_marks) = matched_ranges(path, &found.positions, name_start);
-        let medium = HighlightStyle {
-            font_weight: Some(FontWeight::MEDIUM),
+        // Semibold: medium barely shows at 13 px.
+        let matched = HighlightStyle {
+            font_weight: Some(FontWeight::SEMIBOLD),
             ..Default::default()
         };
         let styled = |text: &str, marks: Vec<Range<usize>>| {
             StyledText::new(text.to_string())
-                .with_highlights(marks.into_iter().map(|range| (range, medium)))
+                .with_highlights(marks.into_iter().map(|range| (range, matched)))
         };
         div()
             .id(("finder-row", row))

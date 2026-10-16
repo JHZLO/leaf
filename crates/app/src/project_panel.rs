@@ -770,7 +770,7 @@ impl ProjectPanel {
     }
 
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
-    /// The part of the name a speed search for `query` matched is set in medium weight.
+    /// The part of the name a speed search for `query` matched is set in semibold.
     /// With `rename`, the name is an input.
     fn render_row(
         row: &Row,
@@ -833,14 +833,14 @@ impl ProjectPanel {
     }
 }
 
-/// A row's name, its speed search match in medium weight.
+/// A row's name, its speed search match in semibold (medium barely shows at 13 px).
 fn name_label(name: &str, query: Option<&str>) -> StyledText {
     let text = StyledText::new(name.to_string());
     match query.and_then(|query| nav::name_match(name, query)) {
         Some(range) => text.with_highlights([(
             range,
             HighlightStyle {
-                font_weight: Some(FontWeight::MEDIUM),
+                font_weight: Some(FontWeight::SEMIBOLD),
                 ..Default::default()
             },
         )]),
