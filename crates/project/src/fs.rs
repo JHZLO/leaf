@@ -436,6 +436,34 @@ pub fn create(root: &Path, dir: &Path, typed: &str) -> Result<(PathBuf, EntryKin
     }
 }
 
+/// Renames the item at `from` (relative to `root`) inside its folder and returns its new path.
+/// Refuses a name another item has; changing only the case of the name is allowed.
+pub fn rename(root: &Path, from: &Path, new_name: &str) -> Result<PathBuf, NameError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if !valid_name(new_name) || new_name.contains('/') {
+        return Err(NameError::Invalid);
+    }
+    let to = from.with_file_name(new_name);
+    if to == from {
+        return Ok(to);
+    }
+    let (abs_from, abs_to) = (root.join(from), root.join(&to));
+    // `rename` would silently replace the other item, so look first. On a case-insensitive
+    // disk `A.md` is `a.md` itself, which is no other item.
+    if let Ok(there) = std::fs::symlink_metadata(&abs_to) {
+        let here = std::fs::symlink_metadata(&abs_from)?;
+        if (there.dev(), there.ino()) != (here.dev(), here.ino()) {
+            return Err(NameError::Exists);
+        }
+    }
+    std::fs::rename(&abs_from, &abs_to)?;
+    Ok(to)
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
@@ -892,6 +920,86 @@ mod tests {
             assert_eq!(created(root.path(), "", typed), Err("Type a name".into()));
         }
         assert!(dir_names(root.path()).is_empty());
+    }
+
+    fn renamed(root: &Path, from: &str, name: &str) -> Result<String, String> {
+        rename(root, Path::new(from), name)
+            .map(|path| path.to_str().unwrap().to_string())
+            .map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn renames_inside_the_folder() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("docs/old.md"), "text\n");
+        assert_eq!(
+            renamed(root.path(), "docs/old.md", " new.md "),
+            Ok("docs/new.md".into())
+        );
+        assert_eq!(dir_names(&root.path().join("docs")), ["new.md"]);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("docs/new.md")).unwrap(),
+            "text\n"
+        );
+        // A folder takes what is inside it along.
+        assert_eq!(renamed(root.path(), "docs", "notes"), Ok("notes".into()));
+        assert!(root.path().join("notes/new.md").is_file());
+    }
+
+    #[test]
+    fn a_rename_never_replaces_another_item() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a.md"), "a\n");
+        write(&root.path().join("b.md"), "b\n");
+        assert_eq!(
+            renamed(root.path(), "a.md", "b.md"),
+            Err("Already exists".into())
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("a.md")).unwrap(),
+            "a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("b.md")).unwrap(),
+            "b\n"
+        );
+    }
+
+    #[test]
+    fn a_rename_may_change_only_the_case() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("readme.md"), "");
+        assert_eq!(
+            renamed(root.path(), "readme.md", "README.md"),
+            Ok("README.md".into())
+        );
+        assert_eq!(dir_names(root.path()), ["README.md"]);
+    }
+
+    #[test]
+    fn the_same_name_changes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a.md"), "");
+        assert_eq!(renamed(root.path(), "a.md", "a.md"), Ok("a.md".into()));
+        assert_eq!(dir_names(root.path()), ["a.md"]);
+    }
+
+    #[test]
+    fn a_new_name_is_one_name() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("a.md"), "");
+        for name in ["b/c.md", "..", ".", "/"] {
+            assert_eq!(
+                renamed(root.path(), "a.md", name),
+                Err("Not a valid name".into()),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            renamed(root.path(), "a.md", "  "),
+            Err("Type a name".into())
+        );
+        assert_eq!(dir_names(root.path()), ["a.md"]);
     }
 
     #[test]

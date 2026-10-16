@@ -13,6 +13,7 @@ pub fn run(check: &mut Check) {
     let was = check.cx.update(|cx| Theme::global(cx).mode);
     speed_search(check);
     new_file(check);
+    rename(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
 
@@ -126,5 +127,44 @@ fn new_file(check: &mut Check) {
         "escape cancels the new name and keeps the tree focused",
         copied,
         Some("docs/drafts/idea.md".into()),
+    );
+}
+
+/// Shift+F6 turns the name into an input with the part before the extension selected.
+fn rename(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // README.md is the last row.
+    check.keys(window, "end shift-f6 i n d e x");
+    check.shot(window, "tree-4-rename");
+    check.keys(window, "enter");
+    let renamed = (
+        fixture.path().join("index.md").is_file(),
+        fixture.path().join("README.md").exists(),
+    );
+    check.expect_eq(
+        "shift-f6 renames README.md to index.md on disk",
+        renamed,
+        (true, false),
+    );
+    let selected = selection(check, window);
+    check.expect_eq(
+        "the renamed file stays selected",
+        selected,
+        Some(PathBuf::from("index.md")),
+    );
+
+    // A name another item has is refused and nothing moves.
+    check.keys(window, "shift-f6 cmd-a . g i t i g n o r e enter");
+    check.shot(window, "tree-5-rename-exists");
+    check.keys(window, "escape");
+    let names = (
+        fixture.path().join("index.md").is_file(),
+        std::fs::read_to_string(fixture.path().join(".gitignore")).ok(),
+    );
+    check.expect_eq(
+        "a rename onto .gitignore is refused",
+        names,
+        (true, Some("target/\n".into())),
     );
 }

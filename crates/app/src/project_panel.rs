@@ -22,7 +22,7 @@ use leaf_project::{
 use crate::{
     keymap::{
         Collapse, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
-        SelectFirst, SelectLast, SelectNext, SelectPrev,
+        Rename, SelectFirst, SelectLast, SelectNext, SelectPrev,
     },
     theme::{self, c, size, z},
 };
@@ -88,6 +88,13 @@ pub enum PanelEvent {
     Open { path: PathBuf, leaf_through: bool },
 }
 
+/// Items the tree changed on disk, so open tabs can follow. Paths are relative to the open
+/// folder; a folder's event covers everything inside it.
+#[expect(dead_code, reason = "the workspace does not follow these yet")]
+pub enum FileEvent {
+    Renamed { from: PathBuf, to: PathBuf },
+}
+
 pub struct ProjectPanel {
     tree: ProjectTree,
     focus_handle: FocusHandle,
@@ -120,13 +127,25 @@ struct Edit {
 enum EditTarget {
     /// A new file, or a folder when the name ends in `/`, inside `dir`.
     New { dir: PathBuf },
+    /// A new name for the item at `path`.
+    Rename { path: PathBuf },
 }
 
 impl EditTarget {
     fn hints(&self) -> &'static [(&'static str, &'static str)] {
         match self {
             EditTarget::New { .. } => &[("↩", "Create"), ("Esc", "Cancel")],
+            EditTarget::Rename { .. } => &[("↩", "Rename"), ("Esc", "Cancel")],
         }
+    }
+}
+
+/// What a rename input selects at first: the name up to its extension, so typing replaces
+/// the name and keeps `.md`. A folder, or a name with no extension (`.gitignore`), is selected whole.
+fn name_selection(name: &str, kind: EntryKind) -> Range<usize> {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 && kind == EntryKind::File => 0..dot,
+        _ => 0..name.len(),
     }
 }
 
@@ -147,6 +166,7 @@ struct EditView {
 struct ResizeDrag;
 
 impl EventEmitter<PanelEvent> for ProjectPanel {}
+impl EventEmitter<FileEvent> for ProjectPanel {}
 
 impl Focusable for ProjectPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -373,6 +393,28 @@ impl ProjectPanel {
         }
     }
 
+    /// Shift+F6: the selected row's name becomes an input.
+    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
+        let rows = self.tree.rows();
+        let Some(row) = self
+            .tree
+            .selected()
+            .and_then(|s| rows.iter().find(|r| r.path == s))
+        else {
+            return;
+        };
+        self.search = None;
+        let target = EditTarget::Rename {
+            path: row.path.clone(),
+        };
+        let select = name_selection(&row.name, row.kind);
+        self.start_edit(target, &row.name, select, window, cx);
+        self.reveal_selection();
+    }
+
     /// Puts an input with `text` in the tree, `select` selected, and gives it focus.
     fn start_edit(
         &mut self,
@@ -437,7 +479,40 @@ impl ProjectPanel {
                 })
                 .detach();
             }
+            EditTarget::Rename { path } => {
+                let work = cx.background_executor().spawn({
+                    let path = path.clone();
+                    async move { fs::rename(&root, &path, &typed) }
+                });
+                cx.spawn_in(window, async move |this, cx| {
+                    let result = work.await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.renamed(path, result, window, cx)
+                    });
+                })
+                .detach();
+            }
         }
+    }
+
+    fn renamed(
+        &mut self,
+        from: PathBuf,
+        result: Result<PathBuf, NameError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = match result {
+            Ok(to) => to,
+            Err(err) => return self.refused(err, cx),
+        };
+        self.end_edit(window, cx);
+        if to != from {
+            self.tree.renamed(&from, &to);
+            self.load_dir(from.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
+            cx.emit(FileEvent::Renamed { from, to });
+        }
+        self.reveal_selection();
     }
 
     fn created(
@@ -644,11 +719,13 @@ impl ProjectPanel {
 
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
     /// The part of the name a speed search for `query` matched is set in medium weight.
+    /// With `rename`, the name is an input.
     fn render_row(
         row: &Row,
         selected: bool,
         focused: bool,
         query: Option<&str>,
+        rename: Option<&EditView>,
         cx: &App,
     ) -> Stateful<Div> {
         let p = theme::colors(cx);
@@ -690,7 +767,10 @@ impl ProjectPanel {
                     )
                 }),
         )
-        .child(name_label(&row.name, query))
+        .map(|el| match rename {
+            Some(edit) => el.child(edit_field(edit, cx)),
+            None => el.child(name_label(&row.name, query)),
+        })
     }
 
     /// The line where a new item's name is typed, under its folder.
@@ -735,6 +815,8 @@ fn edit_field(edit: &EditView, cx: &App) -> impl IntoElement {
                 .border_1()
                 .border_color(c(p.line))
                 .bg(c(p.paper))
+                // Plain ink even on the selected row, like the speed search field.
+                .text_color(c(p.ink))
                 // A click inside stays there; the tree's own mouse-down would take the focus back.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
@@ -851,6 +933,7 @@ impl Render for ProjectPanel {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewFile, window, cx| this.new_file(window, cx)))
+            .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     let width = (event.event.position.x - event.bounds.left()).as_f32();
@@ -907,11 +990,21 @@ impl Render for ProjectPanel {
                         input: edit.input.clone(),
                         error: edit.error.clone(),
                     });
+                    let renaming = match self.edit.as_ref().map(|edit| &edit.target) {
+                        Some(EditTarget::Rename { path }) => Some(path.clone()),
+                        _ => None,
+                    };
                     let panel = cx.weak_entity();
                     move |range, _, cx| {
                         items[range]
                             .iter()
                             .map(|item| match (item, &edit) {
+                                (Item::Row(row), Some(edit))
+                                    if renaming.as_deref() == Some(row.path.as_path()) =>
+                                {
+                                    Self::render_row(row, true, focused, None, Some(edit), cx)
+                                        .into_any_element()
+                                }
                                 (Item::Row(row), _) => {
                                     let (path, kind) = (row.path.clone(), row.kind);
                                     let panel = panel.clone();
@@ -920,6 +1013,7 @@ impl Render for ProjectPanel {
                                         selected.as_deref() == Some(row.path.as_path()),
                                         focused,
                                         query.as_deref(),
+                                        None,
                                         cx,
                                     )
                                     .on_click(move |event, _, cx| {
@@ -1028,7 +1122,10 @@ mod tests {
 
     use leaf_project::{fs::EntryKind, tree::Row};
 
-    use super::{CHEVRON_SLOT, clamp_width, guide_x, hint_keys, row_padding, rows_per_page, tilde};
+    use super::{
+        CHEVRON_SLOT, clamp_width, guide_x, hint_keys, name_selection, row_padding, rows_per_page,
+        tilde,
+    };
 
     fn folder(expanded: bool, loops: bool) -> Row {
         Row {
@@ -1045,6 +1142,15 @@ mod tests {
 
     fn labels(row: Option<&Row>) -> Vec<&'static str> {
         hint_keys(row).iter().map(|&(_, label)| label).collect()
+    }
+
+    #[test]
+    fn a_rename_selects_the_name_up_to_its_extension() {
+        assert_eq!(name_selection("paths.md", EntryKind::File), 0..5);
+        assert_eq!(name_selection("archive.tar.gz", EntryKind::File), 0..11);
+        assert_eq!(name_selection(".gitignore", EntryKind::File), 0..10);
+        assert_eq!(name_selection("Makefile", EntryKind::File), 0..8);
+        assert_eq!(name_selection("v1.2", EntryKind::Dir), 0..4);
     }
 
     #[test]

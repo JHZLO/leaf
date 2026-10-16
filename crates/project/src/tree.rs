@@ -7,7 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::fs::{DirEntry, EntryKind, compare_entries};
+use crate::fs::{DirEntry, EntryKind, compare_entries, sort_entries};
 
 /// One visible line of the tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -182,6 +182,35 @@ impl ProjectTree {
         }
         self.selected = Some(path.to_path_buf());
         unread
+    }
+
+    /// Follows a rename leaf made: the item keeps its open folders, their listings and the
+    /// selection, and its folder's listing shows the new name before it is read again.
+    pub fn renamed(&mut self, from: &Path, to: &Path) {
+        let moved = |path: PathBuf| match path.strip_prefix(from) {
+            Ok(rest) if rest.as_os_str().is_empty() => to.to_path_buf(),
+            Ok(rest) => to.join(rest),
+            Err(_) => path,
+        };
+        self.listings = std::mem::take(&mut self.listings)
+            .into_iter()
+            .map(|(dir, entries)| (moved(dir), entries))
+            .collect();
+        self.expanded = std::mem::take(&mut self.expanded)
+            .into_iter()
+            .map(moved)
+            .collect();
+        self.selected = self.selected.take().map(moved);
+        let (Some(dir), Some(old), Some(new)) = (from.parent(), from.file_name(), to.file_name())
+        else {
+            return;
+        };
+        if let Some(entries) = self.listings.get_mut(dir) {
+            if let Some(entry) = entries.iter_mut().find(|e| OsStr::new(&e.name) == old) {
+                entry.name = crate::paths::display_name(new);
+            }
+            sort_entries(entries);
+        }
     }
 
     /// The visible rows, depth first, with the vein toward the selection.
@@ -556,6 +585,59 @@ mod tests {
         assert!(tree.reveal(Path::new("self/inner/a.md")).is_empty());
         assert!(!tree.is_expanded(Path::new("self")));
         assert!(!tree.is_expanded(Path::new("self/inner")));
+    }
+
+    fn summary(tree: &ProjectTree) -> Vec<(String, bool)> {
+        tree.rows()
+            .into_iter()
+            .map(|r| (r.path.to_str().unwrap().to_string(), r.expanded))
+            .collect()
+    }
+
+    #[test]
+    fn a_renamed_folder_stays_open_with_the_selection_inside() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/b.md".into()));
+        tree.renamed(Path::new("docs/guide"), Path::new("docs/manual"));
+        assert_eq!(selected(&tree), Some("docs/manual/b.md"));
+        assert!(!tree.is_expanded(Path::new("docs/guide")));
+        let want = [
+            ("docs", true),
+            ("docs/manual", true),
+            ("docs/manual/a.md", false),
+            ("docs/manual/b.md", false),
+            ("docs/readme.md", false),
+            ("src", false),
+            ("top.md", false),
+        ];
+        assert_eq!(
+            summary(&tree),
+            want.map(|(p, e)| (p.to_string(), e)).to_vec()
+        );
+    }
+
+    #[test]
+    fn a_renamed_file_moves_to_its_new_place_in_the_order() {
+        let mut tree = tree_with(&[("", vec![file("a.md"), file("b.md"), file("c.md")])]);
+        tree.select(Some("a.md".into()));
+        tree.renamed(Path::new("a.md"), Path::new("d.md"));
+        let names: Vec<String> = tree.rows().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["b.md", "c.md", "d.md"]);
+        assert_eq!(selected(&tree), Some("d.md"));
+    }
+
+    #[test]
+    fn a_rename_leaves_names_that_only_start_the_same() {
+        let mut tree = tree_with(&[
+            ("", vec![dir("docs"), dir("docs2")]),
+            ("docs", vec![file("a.md")]),
+            ("docs2", vec![file("b.md")]),
+        ]);
+        tree.select(Some("docs2/b.md".into()));
+        tree.renamed(Path::new("docs"), Path::new("notes"));
+        assert!(tree.is_expanded(Path::new("docs2")));
+        assert!(tree.listing(Path::new("docs2")).is_some());
+        assert_eq!(selected(&tree), Some("docs2/b.md"));
     }
 
     #[test]
