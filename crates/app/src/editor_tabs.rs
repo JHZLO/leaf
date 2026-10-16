@@ -806,6 +806,23 @@ impl EditorTabs {
             )
     }
 
+    /// Opens `path` with the cursor on `line` (zero-based), as a normal tab; for search results.
+    pub fn open_at(&mut self, path: &Path, line: u32, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
+            self.tabs[index].leaf_through = false;
+            let editor = self.tabs[index].editor.clone();
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(line, 0), window, cx)
+            });
+            self.activate(index, window, cx);
+            return;
+        }
+        self.open(path, false, window, cx);
+        if let Some(pending) = self.pending.iter_mut().find(|p| p.path == path) {
+            pending.cursor = Some((line, 0));
+        }
+    }
+
     /// Reopens a saved session's tabs, each at its cursor, with `active` as the active tab.
     pub fn restore(
         &mut self,

@@ -7,7 +7,10 @@ mod check;
 mod finder;
 mod markdown;
 mod phase1;
+mod preview_sync;
+mod search;
 mod tree;
+mod windows;
 
 use std::{fs, path::PathBuf};
 
@@ -42,6 +45,9 @@ fn main() {
     finder::run(&mut check);
     tree::run(&mut check);
     markdown::run(&mut check);
+    search::run(&mut check);
+    preview_sync::run(&mut check);
+    windows::run(&mut check);
 
     if check.failures.is_empty() {
         println!("visual checks passed; screenshots in target/visual/");

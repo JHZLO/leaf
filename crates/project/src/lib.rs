@@ -7,6 +7,7 @@ pub mod index;
 pub mod markdown;
 pub mod nav;
 pub mod paths;
+pub mod search;
 pub mod session;
 pub mod settings;
 pub mod tree;

@@ -15,9 +15,10 @@ use crate::{
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, Open, OpenFolder,
         PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview,
-        WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        ToggleSearch, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{FileEvent, PanelEvent, ProjectPanel},
+    search_panel::{self, SearchEvent, SearchPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     theme::{self, ZOOM_STEPS, c},
     title_bar,
@@ -30,10 +31,15 @@ enum AfterDiscard {
     OpenFolder(PathBuf),
 }
 
-/// The open file finder.
-struct OpenFinder {
-    view: Entity<Finder>,
-    /// Where focus goes back when the finder closes without opening a file.
+/// What floats over the window: the file finder or the folder search, one at a time.
+enum OverlayView {
+    Finder(Entity<Finder>),
+    Search(Entity<SearchPanel>),
+}
+
+struct Overlay {
+    view: OverlayView,
+    /// Where focus goes back when the overlay closes without opening a file.
     return_focus: Option<FocusHandle>,
     _subscription: Subscription,
 }
@@ -42,7 +48,7 @@ pub struct Workspace {
     panel: Option<Entity<ProjectPanel>>,
     tabs: Entity<EditorTabs>,
     tree_visible: bool,
-    finder: Option<OpenFinder>,
+    overlay: Option<Overlay>,
     copied: Option<Copied>,
     copy_seq: u64,
     /// Dropping it stops watching the old folder.
@@ -130,7 +136,7 @@ impl Workspace {
             panel: None,
             tabs,
             tree_visible: true,
-            finder: None,
+            overlay: None,
             copied: None,
             copy_seq: 0,
             _watcher: None,
@@ -169,8 +175,8 @@ impl Workspace {
     }
 
     pub fn set_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // A finder still open searches the old folder.
-        self.finder = None;
+        // A finder or search still open looks at the old folder.
+        self.overlay = None;
         let panel = cx.new(|cx| ProjectPanel::new(root.clone(), cx));
         self._subscriptions.push(cx.subscribe_in(
             &panel,
@@ -411,8 +417,14 @@ impl Workspace {
 
     /// Opens the finder over the window, or closes it and gives focus back.
     fn toggle_finder(&mut self, _: &ToggleFinder, window: &mut Window, cx: &mut Context<Self>) {
-        if self.finder.is_some() {
-            self.close_finder(true, window, cx);
+        if matches!(
+            self.overlay,
+            Some(Overlay {
+                view: OverlayView::Finder(_),
+                ..
+            })
+        ) {
+            self.close_overlay(true, window, cx);
             return;
         }
         let Some(root) = self.root(cx) else {
@@ -424,18 +436,69 @@ impl Workspace {
             window,
             |this, _, event: &FinderEvent, window, cx| match event {
                 FinderEvent::Open(path) => {
-                    this.close_finder(false, window, cx);
+                    this.close_overlay(false, window, cx);
                     this.tabs
                         .update(cx, |tabs, cx| tabs.open(path, false, window, cx));
                     this.focus_editor_area(window, cx);
                 }
-                FinderEvent::Dismiss => this.close_finder(true, window, cx),
-                FinderEvent::FocusLost => this.close_finder(false, window, cx),
+                FinderEvent::Dismiss => this.close_overlay(true, window, cx),
+                FinderEvent::FocusLost => this.close_overlay(false, window, cx),
             },
         );
-        let return_focus = window.focused(cx);
-        view.read(cx).focus_handle(cx).focus(window, cx);
-        self.finder = Some(OpenFinder {
+        let focus = view.read(cx).focus_handle(cx);
+        self.show_overlay(OverlayView::Finder(view), focus, subscription, window, cx);
+    }
+
+    /// Opens the folder search over the window, or closes it and gives focus back.
+    fn toggle_search(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(
+            self.overlay,
+            Some(Overlay {
+                view: OverlayView::Search(_),
+                ..
+            })
+        ) {
+            self.close_overlay(true, window, cx);
+            return;
+        }
+        let Some(root) = self.root(cx) else {
+            return;
+        };
+        let view = cx.new(|cx| SearchPanel::new(root, window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &SearchEvent, window, cx| match event {
+                SearchEvent::Open { path, line } => {
+                    this.close_overlay(false, window, cx);
+                    let line = *line;
+                    this.tabs
+                        .update(cx, |tabs, cx| tabs.open_at(path, line, window, cx));
+                    this.focus_editor_area(window, cx);
+                }
+                SearchEvent::Dismiss => this.close_overlay(true, window, cx),
+                SearchEvent::FocusLost => this.close_overlay(false, window, cx),
+            },
+        );
+        let focus = view.read(cx).focus_handle(cx);
+        self.show_overlay(OverlayView::Search(view), focus, subscription, window, cx);
+    }
+
+    fn show_overlay(
+        &mut self,
+        view: OverlayView,
+        focus: FocusHandle,
+        subscription: Subscription,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Switching straight from one overlay to the other keeps the original place to return to.
+        let return_focus = match self.overlay.take() {
+            Some(previous) => previous.return_focus,
+            None => window.focused(cx),
+        };
+        focus.focus(window, cx);
+        self.overlay = Some(Overlay {
             view,
             return_focus,
             _subscription: subscription,
@@ -443,13 +506,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// `restore_focus` gives focus back to where it was before the finder opened.
-    fn close_finder(&mut self, restore_focus: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(finder) = self.finder.take() else {
+    /// `restore_focus` gives focus back to where it was before the overlay opened.
+    fn close_overlay(&mut self, restore_focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(overlay) = self.overlay.take() else {
             return;
         };
         if restore_focus {
-            match finder.return_focus {
+            match overlay.return_focus {
                 Some(handle) => handle.focus(window, cx),
                 None => self.focus_editor_area(window, cx),
             }
@@ -621,6 +684,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::focus_tree))
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::toggle_finder))
+            .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
@@ -696,8 +760,9 @@ impl Render for Workspace {
                 },
                 cx,
             ))
-            .when_some(self.finder.as_ref(), |el, finder| {
-                el.child(finder::overlay(finder.view.clone(), cx))
+            .when_some(self.overlay.as_ref(), |el, overlay| match &overlay.view {
+                OverlayView::Finder(view) => el.child(finder::overlay(view.clone(), cx)),
+                OverlayView::Search(view) => el.child(search_panel::overlay(view.clone(), cx)),
             })
     }
 }

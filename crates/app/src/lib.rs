@@ -11,6 +11,7 @@ pub mod keymap;
 mod menus;
 mod preview;
 mod project_panel;
+mod search_panel;
 mod status_bar;
 pub mod theme;
 mod title_bar;

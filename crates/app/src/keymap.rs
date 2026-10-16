@@ -25,6 +25,7 @@ actions!(
         Quit,
         ToggleFinder,
         RevealInFinder,
+        ToggleSearch,
     ]
 );
 
@@ -128,6 +129,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("space", LeafThrough, panel),
         KeyBinding::new("escape", FocusEditor, panel),
         KeyBinding::new("cmd-shift-o", ToggleFinder, ws),
+        KeyBinding::new("cmd-shift-f", ToggleSearch, ws),
         KeyBinding::new("cmd-alt-r", RevealInFinder, ws),
         KeyBinding::new("cmd-n", NewFile, panel),
         KeyBinding::new("shift-f6", Rename, panel),
