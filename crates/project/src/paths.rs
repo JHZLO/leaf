@@ -33,3 +33,62 @@ pub fn with_lines(rel: &Path, start: u32, end: u32) -> String {
         format!("{}:{start}-{end}", relative(rel))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::*;
+
+    /// "한글" as macOS may hand it back: decomposed into jamo (NFD).
+    const HANGUL_NFD: &str = "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}";
+    const HANGUL_NFC: &str = "\u{d55c}\u{ae00}";
+
+    #[test]
+    fn decomposed_hangul_names_become_composed() {
+        let name = format!("{HANGUL_NFD}.md");
+        assert_eq!(display_name(OsStr::new(&name)), format!("{HANGUL_NFC}.md"));
+        assert_eq!(display_name(OsStr::new("plain.md")), "plain.md");
+    }
+
+    #[test]
+    fn absolute_paths_join_the_root_in_nfc() {
+        let root = Path::new("/Users/me/notes");
+        assert_eq!(
+            absolute(root, Path::new("docs/a.md")),
+            "/Users/me/notes/docs/a.md"
+        );
+        let rel = format!("docs/{HANGUL_NFD}.md");
+        assert_eq!(
+            absolute(root, Path::new(&rel)),
+            format!("/Users/me/notes/docs/{HANGUL_NFC}.md")
+        );
+    }
+
+    #[test]
+    fn relative_paths_have_no_trailing_slash_and_the_root_is_a_dot() {
+        assert_eq!(relative(Path::new("docs/a.md")), "docs/a.md");
+        assert_eq!(relative(Path::new("docs/guide")), "docs/guide");
+        assert_eq!(relative(Path::new("docs/guide/")), "docs/guide");
+        assert_eq!(relative(Path::new("")), ".");
+        // Spaces stay as they are; whoever pastes decides on quoting.
+        assert_eq!(relative(Path::new("my docs/a b.md")), "my docs/a b.md");
+        let rel = format!("{HANGUL_NFD}/a.md");
+        assert_eq!(relative(Path::new(&rel)), format!("{HANGUL_NFC}/a.md"));
+    }
+
+    #[test]
+    fn a_line_or_a_span_of_lines_follows_the_path() {
+        assert_eq!(with_lines(Path::new("docs/a.md"), 12, 12), "docs/a.md:12");
+        assert_eq!(
+            with_lines(Path::new("docs/a.md"), 12, 18),
+            "docs/a.md:12-18"
+        );
+        assert_eq!(with_lines(Path::new("a.md"), 1, 1), "a.md:1");
+        let rel = format!("{HANGUL_NFD}.md");
+        assert_eq!(
+            with_lines(Path::new(&rel), 3, 4),
+            format!("{HANGUL_NFC}.md:3-4")
+        );
+    }
+}
