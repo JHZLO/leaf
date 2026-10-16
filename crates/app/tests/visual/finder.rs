@@ -61,10 +61,15 @@ pub fn run(check: &mut Check) {
     );
     check.keys(window, "cmd-z");
 
-    // Opened from the tree, Cmd+Shift+O closes it again and the tree keeps walking.
+    // Opened from the tree, Cmd+Shift+O closes it again and the tree keeps walking. The tree
+    // already follows the file the finder opened, so Down lands on the row after it.
     check.keys(window, "cmd-1 down");
     let before = check.workspace(window, |w, cx| w.tree_selection(cx));
-    check.expect_eq("the tree selects docs", before, Some(PathBuf::from("docs")));
+    check.expect_eq(
+        "the tree walks on from the opened file",
+        before,
+        Some(PathBuf::from("docs/notes.md")),
+    );
     check.keys(window, "cmd-shift-o r e a d cmd-shift-o down");
     let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
     check.expect_eq(

@@ -90,7 +90,6 @@ pub enum PanelEvent {
 
 /// Items the tree changed on disk, so open tabs can follow. Paths are relative to the open
 /// folder; a folder's event covers everything inside it.
-#[expect(dead_code, reason = "the workspace does not follow these yet")]
 pub enum FileEvent {
     Renamed { from: PathBuf, to: PathBuf },
     Trashed { path: PathBuf },

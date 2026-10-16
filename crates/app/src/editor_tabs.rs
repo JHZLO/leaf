@@ -503,6 +503,38 @@ impl EditorTabs {
         });
     }
 
+    /// The tree renamed `from` (a file or a folder) to `to`; tabs inside follow the new path.
+    pub fn renamed(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
+        let moved = |path: &mut PathBuf| {
+            if let Ok(rest) = path.strip_prefix(from) {
+                *path = to.join(rest);
+            }
+        };
+        self.tabs.iter_mut().for_each(|tab| moved(&mut tab.path));
+        self.pending
+            .iter_mut()
+            .for_each(|open| moved(&mut open.path));
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
+    /// The tree moved `path` to the Trash: clean tabs inside close; edited ones stay, marked deleted,
+    /// so nothing typed is lost.
+    pub fn trashed(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        for index in (0..self.tabs.len()).rev() {
+            if !self.tabs[index].path.starts_with(path) {
+                continue;
+            }
+            if self.tabs[index].dirty {
+                self.tabs[index].deleted = true;
+            } else {
+                self.remove_tab(index, window, cx);
+            }
+        }
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
     /// Closes the active tab, asking first when it has unsaved edits.
     pub fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.active_tab() else { return };

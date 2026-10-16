@@ -17,7 +17,7 @@ use crate::{
         PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview,
         WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
-    project_panel::{PanelEvent, ProjectPanel},
+    project_panel::{FileEvent, PanelEvent, ProjectPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     theme::{self, ZOOM_STEPS, c},
     title_bar,
@@ -52,6 +52,8 @@ pub struct Workspace {
     /// Folders opened before, newest first; the empty window offers them.
     recent: Vec<PathBuf>,
     recent_selected: usize,
+    /// The active file the tree last moved to, so it follows only real switches.
+    followed: Option<PathBuf>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -135,6 +137,7 @@ impl Workspace {
             save_task: Task::ready(()),
             recent: session::load(&session::default_path()).recent,
             recent_selected: 0,
+            followed: None,
             focus_handle,
             _subscriptions: subscriptions,
         }
@@ -183,9 +186,24 @@ impl Workspace {
                 }
             },
         ));
+        self._subscriptions.push(cx.subscribe_in(
+            &panel,
+            window,
+            |this, _, event: &FileEvent, window, cx| {
+                match event {
+                    FileEvent::Renamed { from, to } => {
+                        this.tabs.update(cx, |tabs, cx| tabs.renamed(from, to, cx))
+                    }
+                    FileEvent::Trashed { path } => this
+                        .tabs
+                        .update(cx, |tabs, cx| tabs.trashed(path, window, cx)),
+                }
+            },
+        ));
         self.tabs = cx.new(|cx| EditorTabs::new(root.clone(), cx));
         self._subscriptions
             .push(cx.subscribe(&self.tabs, |this, _, _: &TabsChanged, cx| {
+                this.follow_active_file(cx);
                 this.schedule_save(cx);
                 cx.notify();
             }));
@@ -311,6 +329,18 @@ impl Workspace {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let _ = this.update(cx, |this, cx| this.save_session(cx));
         });
+    }
+
+    /// The tree shows the file in the active tab (IntelliJ's "always select opened file").
+    fn follow_active_file(&mut self, cx: &mut Context<Self>) {
+        let active = self.active_file(cx);
+        if active == self.followed {
+            return;
+        }
+        self.followed = active.clone();
+        if let (Some(panel), Some(path)) = (self.panel.clone(), active) {
+            panel.update(cx, |panel, cx| panel.reveal(&path, cx));
+        }
     }
 
     /// The tree's selection, relative to the open folder.

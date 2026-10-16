@@ -14,7 +14,38 @@ pub fn run(check: &mut Check) {
     speed_search(check);
     new_file(check);
     rename(check);
+    tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
+}
+
+/// Open tabs follow a rename in the tree, and the tree follows the file a tab switch shows.
+fn tabs_follow(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // Open docs/notes.md, then rename it from the tree.
+    check.keys(window, "down right down down enter");
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "enter opens docs/notes.md",
+        active,
+        Some(PathBuf::from("docs/notes.md")),
+    );
+    check.keys(window, "cmd-1 shift-f6 cmd-a j o u r n a l . m d enter");
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "the open tab follows a rename",
+        active,
+        Some(PathBuf::from("docs/journal.md")),
+    );
+    // Open a nested file from the finder; the tree opens its folders and selects it.
+    check.keys(window, "cmd-1 left left up cmd-shift-o g p a t h enter");
+    let selected = selection(check, window);
+    check.expect_eq(
+        "the tree follows the active file",
+        selected,
+        Some(PathBuf::from("docs/guide/paths.md")),
+    );
+    check.shot(window, "tree-6-follows-active-file");
 }
 
 /// A window on `root` in the light theme. Set after opening: a new window takes the system's.
