@@ -180,7 +180,7 @@ impl ProjectPanel {
             tree: ProjectTree::new(root),
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
-            show_key_hints: true,
+            show_key_hints: crate::settings(cx).key_hints,
             width: size::TREE_WIDTH,
             search: None,
             focus_out: None,

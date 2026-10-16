@@ -10,7 +10,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, WindowExt as _,
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
-    input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _},
+    input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _, TabSize},
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use leaf_project::{
@@ -291,7 +291,11 @@ impl EditorTabs {
             EditorState::new(window, cx)
                 .language(language.clone())
                 .line_number(true)
-                .soft_wrap(markdown)
+                .soft_wrap(crate::settings(cx).wraps(markdown))
+                .tab_size(TabSize {
+                    tab_size: crate::settings(cx).tab_size,
+                    hard_tabs: false,
+                })
                 .default_value(file.text)
         });
         let subscriptions = vec![
@@ -1091,7 +1095,7 @@ impl Render for EditorTabs {
                     .readonly(tab.read_only)
                     .h_full()
                     .font_family(cx.theme().mono_font_family.clone())
-                    .text_size(z(size::EDITOR_TEXT, cx));
+                    .text_size(z(theme::editor_text(cx), cx));
                 if tab.is_markdown() {
                     // The paper sheet: a reading-width page on the desk, keeping 20 px of desk on each
                     // side when the pane is narrower than the page.

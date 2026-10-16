@@ -58,6 +58,46 @@ actions!(
     [Newline, IndentItem, OutdentItem, ToggleBold, ToggleItalic]
 );
 
+/// Binds the user's extra keys from the settings file. Returns the first one that could not be bound.
+pub fn bind_overrides(
+    overrides: &[leaf_project::settings::KeyOverride],
+    cx: &mut App,
+) -> Option<String> {
+    let mut problem = None;
+    let mut bindings = Vec::new();
+    for entry in overrides {
+        let binding = cx
+            .build_action(&entry.action, None)
+            .map_err(|err| format!("unknown action {}: {err}", entry.action))
+            .and_then(|action| {
+                let context = match &entry.context {
+                    Some(source) => Some(std::rc::Rc::new(
+                        KeyBindingContextPredicate::parse(source)
+                            .map_err(|err| format!("context {source}: {err}"))?,
+                    )),
+                    None => None,
+                };
+                KeyBinding::load(
+                    &entry.key,
+                    action,
+                    context,
+                    false,
+                    None,
+                    cx.keyboard_mapper().as_ref(),
+                )
+                .map_err(|err| format!("key {}: {err}", entry.key))
+            });
+        match binding {
+            Ok(binding) => bindings.push(binding),
+            Err(err) => {
+                problem.get_or_insert(format!("settings.json keymap: {err}"));
+            }
+        }
+    }
+    cx.bind_keys(bindings);
+    problem
+}
+
 pub fn init(cx: &mut App) {
     let ws = Some(WORKSPACE);
     let panel = Some(PROJECT_PANEL);

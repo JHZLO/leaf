@@ -220,7 +220,6 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.restore(&saved.expanded, saved.selected.clone(), cx);
                 panel.width = saved.tree_width.unwrap_or(panel.width);
-                panel.show_key_hints = !saved.hide_key_hints;
             });
             self.tabs.update(cx, |tabs, cx| {
                 tabs.restore(&saved.tabs, saved.active_tab, window, cx);
@@ -309,7 +308,6 @@ impl Workspace {
             saved.expanded = panel.expanded_dirs();
             saved.selected = panel.selected().map(Path::to_path_buf);
             saved.tree_width = Some(panel.width);
-            saved.hide_key_hints = !panel.show_key_hints;
         }
         let tabs = self.tabs.read(cx);
         (saved.tabs, saved.active_tab) = tabs.session_tabs(cx);
@@ -591,7 +589,17 @@ impl Render for Workspace {
             })
         };
         let stem = match self.panel {
-            Some(_) => tabs.error.clone().or(stem),
+            // A settings file that could not be used says so until a file is open.
+            Some(_) => tabs
+                .error
+                .clone()
+                .or_else(|| {
+                    active
+                        .is_none()
+                        .then(|| cx.global::<crate::UserSettings>().error.clone())
+                        .flatten()
+                })
+                .or(stem),
             None => Some("No folder open".to_string()),
         };
         let language = active.map(|t| status_bar::language_label(&t.language));

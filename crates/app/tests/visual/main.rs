@@ -17,8 +17,18 @@ fn main() {
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/visual");
     fs::create_dir_all(&out).expect("out dir");
     let session = tempfile::NamedTempFile::new().expect("session file");
+    // Settings the tests rely on: the defaults plus one extra key, to prove user bindings apply.
+    let settings = tempfile::NamedTempFile::new().expect("settings file");
+    fs::write(
+        settings.path(),
+        r#"{ "keymap": [ { "key": "cmd-p", "action": "workspace::ToggleFinder", "context": "Workspace" } ] }"#,
+    )
+    .expect("write settings");
     // Safe: set before anything else runs, on the only thread.
-    unsafe { std::env::set_var("LEAF_SESSION_PATH", session.path()) };
+    unsafe {
+        std::env::set_var("LEAF_SESSION_PATH", session.path());
+        std::env::set_var("LEAF_SETTINGS_PATH", settings.path());
+    }
 
     let mut cx = VisualTestAppContext::new(current_platform(false));
     cx.update(leaf::init);

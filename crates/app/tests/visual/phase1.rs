@@ -70,6 +70,15 @@ pub fn run(check: &mut Check) {
     check
         .cx
         .update(|cx| Theme::change(ThemeMode::Dark, None, cx));
+    // A key from the settings file (cmd-p opens the finder) works like a built-in one.
+    check.keys(window, "cmd-p n o t e s enter");
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "a key bound in settings.json opens the finder",
+        active,
+        Some(PathBuf::from("docs/notes.md")),
+    );
+
     // The first window's folder is saved as recent; the empty window offers it and Enter opens it.
     check.cx.advance_clock(Duration::from_secs(2));
     let empty = check.open(None);

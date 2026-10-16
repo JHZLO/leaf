@@ -18,16 +18,43 @@ pub mod workspace;
 
 use std::path::PathBuf;
 
-/// Registers leaf's theme and keys; what both the app and the UI tests start from.
-pub fn init(cx: &mut gpui_kit::App) {
+use gpui_kit::{App, Global};
+use leaf_project::settings::{self, Settings};
+
+/// The user's settings, read once at startup, and why the file could not be used, if it could not.
+pub struct UserSettings {
+    pub settings: Settings,
+    pub error: Option<String>,
+}
+
+impl Global for UserSettings {}
+
+pub fn settings(cx: &App) -> &Settings {
+    &cx.global::<UserSettings>().settings
+}
+
+/// Registers leaf's settings, theme and keys; what both the app and the UI tests start from.
+pub fn init(cx: &mut App) {
+    let (settings, error) = settings::load(&settings::default_path());
+    let overrides = settings.keymap.clone();
+    cx.set_global(UserSettings { settings, error });
     gpui_kit::init(cx);
     theme::init(cx);
     keymap::init(cx);
+    // Bound after leaf's own keys so the user's win.
+    if let Some(problem) = keymap::bind_overrides(&overrides, cx) {
+        let state = cx.global_mut::<UserSettings>();
+        state.error.get_or_insert(problem);
+    }
 }
 
 /// Runs the app. `arg` is a folder to open, or a file to open inside its folder.
 pub fn run(arg: Option<PathBuf>) {
     // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
+    // A file of defaults the first time, so the settings are easy to find and edit.
+    if let Err(err) = settings::write_default_if_missing(&settings::default_path()) {
+        eprintln!("leaf: no settings file written: {err}");
+    }
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {

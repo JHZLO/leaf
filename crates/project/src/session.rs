@@ -20,7 +20,6 @@ pub struct Session {
     pub preview: bool,
     /// UI zoom in percent; 0 means the default (100).
     pub zoom: u32,
-    pub hide_key_hints: bool,
     /// Folders opened before, newest first.
     pub recent: Vec<PathBuf>,
 }
@@ -118,7 +117,6 @@ mod tests {
             tree_width: Some(260.5),
             preview: true,
             zoom: 125,
-            hide_key_hints: true,
             recent: vec![PathBuf::from("/Users/me/notes")],
         }
     }

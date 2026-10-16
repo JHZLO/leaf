@@ -113,7 +113,8 @@ pub fn run(check: &mut Check) {
         window,
         "tab",
         "markdown: tab on a plain line is gpui-kit's tab",
-        &format!("{base}\n    "),
+        // Enter kept the line's 2 spaces; Tab adds the default tab size (4).
+        &format!("{base}\n      "),
     );
     expect_text(
         check,
@@ -144,7 +145,7 @@ pub fn run(check: &mut Check) {
         window,
         "tab",
         "code: tab indents at the cursor",
-        "- item\n  ",
+        "- item\n    ",
     );
     type_text(check, window, "word");
     expect_text(
@@ -152,6 +153,6 @@ pub fn run(check: &mut Check) {
         window,
         "alt-shift-left cmd-b",
         "code: cmd-b does nothing",
-        "- item\n  word",
+        "- item\n    word",
     );
 }

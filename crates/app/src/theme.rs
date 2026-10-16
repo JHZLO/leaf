@@ -85,6 +85,19 @@ pub const DARK: Palette = Palette {
 /// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.
 pub const MONO_FONT: &str = ".AppleSystemUIFontMonospaced";
 
+/// The editor font the settings name, with "SF Mono" mapped to the name GPUI can find.
+fn editor_font(cx: &App) -> String {
+    match crate::settings(cx).editor_font.as_str() {
+        "SF Mono" => MONO_FONT.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The editor's text size at 100% zoom, from the settings.
+pub fn editor_text(cx: &App) -> f32 {
+    crate::settings(cx).editor_font_size
+}
+
 /// The palette for the current appearance.
 pub fn colors(cx: &App) -> &'static Palette {
     if cx.theme().is_dark() { &DARK } else { &LIGHT }
@@ -132,9 +145,10 @@ pub fn z(value: f32, cx: &App) -> Pixels {
 pub fn set_zoom(percent: u32, cx: &mut App) {
     cx.set_global(Zoom(percent));
     let factor = percent as f32 / 100.;
+    let editor_size = editor_text(cx);
     Theme::update(cx, |theme| {
         theme.font_size = px(size::UI_TEXT * factor);
-        theme.mono_font_size = px(size::EDITOR_TEXT * factor);
+        theme.mono_font_size = px(editor_size * factor);
     });
 }
 
@@ -142,14 +156,14 @@ fn hex(value: u32) -> String {
     format!("#{value:06X}")
 }
 
-fn theme_config(name: &str, mode: &str, p: &Palette) -> serde_json::Value {
+fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Value {
     let style = |color: u32| serde_json::json!({ "color": hex(color) });
     serde_json::json!({
         "name": name,
         "mode": mode,
         "font.size": size::UI_TEXT,
-        "mono_font.family": MONO_FONT,
-        "mono_font.size": size::EDITOR_TEXT,
+        "mono_font.family": editor_font(cx),
+        "mono_font.size": editor_text(cx),
         "radius": 4,
         "radius.lg": 6,
         "shadow": false,
@@ -239,7 +253,7 @@ fn theme_config(name: &str, mode: &str, p: &Palette) -> serde_json::Value {
 pub fn init(cx: &mut App) {
     let set = serde_json::json!({
         "name": "leaf",
-        "themes": [theme_config("Leaf Light", "light", &LIGHT), theme_config("Leaf Dark", "dark", &DARK)],
+        "themes": [theme_config("Leaf Light", "light", &LIGHT, cx), theme_config("Leaf Dark", "dark", &DARK, cx)],
     });
     let registry = ThemeRegistry::global_mut(cx);
     if let Err(err) = registry.load_themes_from_str(&set.to_string()) {

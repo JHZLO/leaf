@@ -8,5 +8,6 @@ pub mod markdown;
 pub mod nav;
 pub mod paths;
 pub mod session;
+pub mod settings;
 pub mod tree;
 pub mod watch;
