@@ -1,8 +1,9 @@
 //! Directory listings and text files, read and written the way the user left them.
 
 use std::{
-    io::{self, Read as _},
+    io::{self, Read as _, Write as _},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
 };
 
@@ -256,6 +257,10 @@ pub fn read_text(path: &Path) -> Result<TextFile, ReadError> {
 }
 
 /// Writes `text` (with `\n` endings) back with the file's own line ending and BOM.
+///
+/// The bytes go to a temporary file in the same folder, reach the disk, and then replace the
+/// file in one rename: a crash or a full disk leaves the old file whole, never half written.
+/// The file keeps its permissions, and a symlink is written through to its target.
 pub fn write_text(
     path: &Path,
     text: &str,
@@ -270,14 +275,84 @@ pub fn write_text(
         LineEnding::Lf => out.push_str(text),
         LineEnding::Crlf => out.push_str(&text.replace('\n', "\r\n")),
     }
-    std::fs::write(path, out)?;
-    stamp(path)
+    let target = write_target(path);
+    let permissions = match std::fs::metadata(&target) {
+        Ok(meta) if meta.permissions().readonly() => {
+            // A plain write would fail here; the rename would quietly replace the file.
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the file is read-only",
+            ));
+        }
+        Ok(meta) => Some(meta.permissions()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err),
+    };
+    let (temp, file) = create_temp_beside(&target)?;
+    if let Err(err) = replace_with(file, &temp, &target, out.as_bytes(), permissions) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err);
+    }
+    stamp(&target)
+}
+
+fn replace_with(
+    mut file: std::fs::File,
+    temp: &Path,
+    target: &Path,
+    bytes: &[u8],
+    permissions: Option<std::fs::Permissions>,
+) -> io::Result<()> {
+    if let Some(permissions) = permissions {
+        file.set_permissions(permissions)?;
+    }
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(temp, target)
+}
+
+/// A new, empty file next to `target`, named so a leftover from a crash is recognizable.
+fn create_temp_beside(target: &Path) -> io::Result<(PathBuf, std::fs::File)> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = target.parent().unwrap_or(Path::new(""));
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let temp = dir.join(format!(".leaf-save-{}-{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((temp, file)),
+            // A leftover from an earlier run with the same process id.
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// The path a file should be written to: a symlink's target, so saving never replaces the link.
 pub fn write_target(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    if let Ok(target) = std::fs::canonicalize(path) {
+        return target;
+    }
+    // A missing file, or a link whose target is gone: follow the links by hand so saving
+    // recreates the target instead of replacing the link. The limit stops a link cycle.
+    let mut path = path.to_path_buf();
+    for _ in 0..MAX_SYMLINK_HOPS {
+        let Ok(next) = std::fs::read_link(&path) else {
+            break;
+        };
+        path = match path.parent() {
+            Some(dir) => dir.join(next),
+            None => next,
+        };
+    }
+    path
 }
+
+/// The same limit macOS puts on links followed while resolving one path.
+const MAX_SYMLINK_HOPS: usize = 32;
 
 #[cfg(test)]
 mod tests {
@@ -543,5 +618,102 @@ mod tests {
             read_text(&dir.path().join("gone.md")),
             Err(ReadError::Io(err)) if err.kind() == io::ErrorKind::NotFound
         ));
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn saves_with_the_files_own_line_ending_and_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        write(&path, "\u{feff}one\r\ntwo\r\n");
+        let file = read_text(&path).unwrap();
+        let edited = format!("{}three\n", file.text);
+        let stamp = write_text(&path, &edited, file.line_ending, file.bom).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"\xEF\xBB\xBFone\r\ntwo\r\nthree\r\n"
+        );
+        assert_eq!(stamp, super::stamp(&path).unwrap());
+
+        write_text(&path, "no newline at the end", LineEnding::Lf, false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"no newline at the end");
+    }
+
+    #[test]
+    fn saving_leaves_no_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        write(&path, "old\n");
+        write_text(&path, "new\n", LineEnding::Lf, false).unwrap();
+        write_text(&dir.path().join("b.md"), "fresh\n", LineEnding::Lf, false).unwrap();
+        assert_eq!(dir_names(dir.path()), ["a.md", "b.md"]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+    }
+
+    #[test]
+    fn saving_keeps_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.sh");
+        write(&path, "echo old\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750)).unwrap();
+        write_text(&path, "echo new\n", LineEnding::Lf, false).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o750);
+    }
+
+    #[test]
+    fn refuses_to_replace_a_read_only_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("locked.md");
+        write(&path, "keep\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let err = write_text(&path, "lost\n", LineEnding::Lf, false).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "keep\n");
+        assert_eq!(dir_names(dir.path()), ["locked.md"]);
+    }
+
+    #[test]
+    fn saving_writes_through_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes = dir.path().join("notes");
+        let docs = dir.path().join("docs");
+        write(&notes.join("real.md"), "old\n");
+        std::fs::create_dir(&docs).unwrap();
+        let link = docs.join("link.md");
+        symlink("../notes/real.md", &link).unwrap();
+
+        write_text(&link, "new\n", LineEnding::Lf, false).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(notes.join("real.md")).unwrap(),
+            "new\n"
+        );
+        // The temporary file went next to the target, and nothing was left behind.
+        assert_eq!(dir_names(&docs), ["link.md"]);
+        assert_eq!(dir_names(&notes), ["real.md"]);
+    }
+
+    #[test]
+    fn saving_through_a_dangling_symlink_recreates_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link.md");
+        symlink("gone.md", &link).unwrap();
+        write_text(&link, "back\n", LineEnding::Lf, false).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("gone.md")).unwrap(),
+            "back\n"
+        );
     }
 }
