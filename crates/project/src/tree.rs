@@ -321,4 +321,154 @@ mod tests {
         tree.set_listing("other".into(), vec![]);
         assert_eq!(selected(&tree), Some("b.md"));
     }
+
+    /// docs/ (open) > guide/ (open) > a.md, b.md; docs/readme.md; src/ (closed); top.md
+    fn sample() -> ProjectTree {
+        tree_with(&[
+            ("", vec![dir("docs"), dir("src"), file("top.md")]),
+            ("docs", vec![dir("guide"), file("readme.md")]),
+            ("docs/guide", vec![file("a.md"), file("b.md")]),
+        ])
+    }
+
+    const PLAIN: Guide = Guide {
+        vein: false,
+        tick: false,
+    };
+    const VEIN: Guide = Guide {
+        vein: true,
+        tick: false,
+    };
+    const TICK: Guide = Guide {
+        vein: true,
+        tick: true,
+    };
+
+    fn guides(tree: &ProjectTree) -> Vec<(String, Vec<Guide>)> {
+        tree.rows()
+            .into_iter()
+            .map(|r| (r.path.to_str().unwrap().to_string(), r.guides))
+            .collect()
+    }
+
+    fn expect(rows: &[(&str, &[Guide])]) -> Vec<(String, Vec<Guide>)> {
+        rows.iter()
+            .map(|(p, g)| (p.to_string(), g.to_vec()))
+            .collect()
+    }
+
+    #[test]
+    fn rows_walk_open_folders_depth_first() {
+        let rows = sample().rows();
+        let summary: Vec<(&str, usize, bool)> = rows
+            .iter()
+            .map(|r| (r.path.to_str().unwrap(), r.depth, r.expanded))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("docs", 0, true),
+                ("docs/guide", 1, true),
+                ("docs/guide/a.md", 2, false),
+                ("docs/guide/b.md", 2, false),
+                ("docs/readme.md", 1, false),
+                ("src", 0, false),
+                ("top.md", 0, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_vein_runs_from_each_ancestor_down_to_the_child_on_the_path() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/b.md".into()));
+        assert_eq!(
+            guides(&tree),
+            expect(&[
+                ("docs", &[]),
+                ("docs/guide", &[TICK]),
+                ("docs/guide/a.md", &[PLAIN, VEIN]),
+                ("docs/guide/b.md", &[PLAIN, TICK]),
+                ("docs/readme.md", &[PLAIN]),
+                ("src", &[]),
+                ("top.md", &[]),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_vein_reaches_a_selected_folder() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide".into()));
+        assert_eq!(
+            guides(&tree),
+            expect(&[
+                ("docs", &[]),
+                ("docs/guide", &[TICK]),
+                ("docs/guide/a.md", &[PLAIN, PLAIN]),
+                ("docs/guide/b.md", &[PLAIN, PLAIN]),
+                ("docs/readme.md", &[PLAIN]),
+                ("src", &[]),
+                ("top.md", &[]),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_vein_passes_over_the_siblings_above_the_path() {
+        let mut tree = sample();
+        tree.select(Some("docs/readme.md".into()));
+        assert_eq!(
+            guides(&tree),
+            expect(&[
+                ("docs", &[]),
+                ("docs/guide", &[VEIN]),
+                ("docs/guide/a.md", &[VEIN, PLAIN]),
+                ("docs/guide/b.md", &[VEIN, PLAIN]),
+                ("docs/readme.md", &[TICK]),
+                ("src", &[]),
+                ("top.md", &[]),
+            ])
+        );
+    }
+
+    #[test]
+    fn no_vein_for_a_top_level_selection_or_none() {
+        let mut tree = sample();
+        let all_plain = |tree: &ProjectTree| {
+            tree.rows()
+                .iter()
+                .all(|r| r.guides.iter().all(|g| *g == PLAIN))
+        };
+        assert!(all_plain(&tree));
+        tree.select(Some("top.md".into()));
+        assert!(all_plain(&tree));
+        tree.select(Some("docs".into()));
+        assert!(all_plain(&tree));
+    }
+
+    #[test]
+    fn collapsing_a_folder_lifts_the_selection_inside_it() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/a.md".into()));
+        tree.collapse(Path::new("docs"));
+        assert_eq!(selected(&tree), Some("docs"));
+        assert_eq!(tree.rows().len(), 3);
+        // A selection outside the folder stays.
+        tree.select(Some("top.md".into()));
+        tree.expand(Path::new("docs"));
+        tree.collapse(Path::new("docs"));
+        assert_eq!(selected(&tree), Some("top.md"));
+    }
+
+    #[test]
+    fn expanding_asks_for_a_listing_only_once() {
+        let mut tree = sample();
+        assert!(tree.expand(Path::new("src")));
+        tree.set_listing("src".into(), vec![file("main.rs")]);
+        tree.collapse(Path::new("src"));
+        assert!(!tree.expand(Path::new("src")));
+        tree.invalidate(Path::new("src"));
+        assert!(tree.expand(Path::new("src")));
+    }
 }
