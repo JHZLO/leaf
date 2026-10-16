@@ -277,17 +277,13 @@ impl EditorTabs {
         preview.update(cx, |preview, cx| preview.schedule(source, cx));
     }
 
-    fn render_tab_bar(&self, cx: &App) -> impl IntoElement {
+    fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
-        div()
-            .h(z(size::TAB_BAR, cx))
-            .flex_none()
-            .flex()
-            .bg(c(p.side))
-            .border_b_1()
-            .border_color(c(p.line))
-            .text_size(z(12.5, cx))
-            .children(self.tabs.iter().enumerate().map(|(i, tab)| {
+        let tabs: Vec<_> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
                 let active = self.active == Some(i);
                 let name = tab
                     .path
@@ -295,24 +291,87 @@ impl EditorTabs {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 div()
+                    .id(("tab", i))
                     .relative()
+                    .flex_none()
+                    .h_full()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_4()
+                    .gap(z(7., cx))
+                    .px(z(16., cx))
                     .border_r_1()
                     .border_color(c(p.line))
                     .text_color(c(if active { p.ink } else { p.sub }))
-                    .when(active, |el| {
-                        el.bg(c(p.paper)).border_b_2().border_color(c(p.accent))
+                    .map(|el| {
+                        if active {
+                            el.bg(c(p.paper))
+                        } else {
+                            el.hover(|style| style.bg(c(p.hover)))
+                        }
                     })
                     .when(tab.leaf_through, |el| el.italic())
                     .child(name)
                     .when(tab.dirty, |el| {
-                        el.child(div().size(px(6.)).rounded_full().bg(c(p.sub)))
+                        el.child(
+                            div()
+                                .flex_none()
+                                .size(z(6., cx))
+                                .rounded_full()
+                                .bg(c(p.sub)),
+                        )
                     })
-            }))
+                    // Drawn over the tab rather than as a border, so the active tab is as tall as the rest.
+                    .when(active, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .bottom_0()
+                                .h(z(2., cx))
+                                .bg(c(p.accent)),
+                        )
+                    })
+                    .when(tab.leaf_through, |el| {
+                        el.child(folded_corner(z(9., cx), c(p.fold)))
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        if i < this.tabs.len() {
+                            this.activate(i, window, cx);
+                            this.focus_active(window, cx);
+                        }
+                    }))
+            })
+            .collect();
+        div()
+            .h(z(size::TAB_BAR, cx))
+            .flex_none()
+            .flex()
+            .overflow_x_hidden()
+            .bg(c(p.side))
+            .border_b_1()
+            .border_color(c(p.line))
+            .text_size(z(12.5, cx))
+            .children(tabs)
     }
+}
+
+/// The leaf-through mark: the tab's top right corner folded over, a right triangle of `size`.
+fn folded_corner(size: Pixels, color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let (right, top) = (bounds.right(), bounds.top());
+            let mut corner = gpui_kit::Path::new(point(right - size, top));
+            corner.line_to(point(right, top));
+            corner.line_to(point(right, top + size));
+            window.paint_path(corner, color);
+        },
+    )
+    .absolute()
+    .top_0()
+    .right_0()
+    .size(size)
 }
 
 impl Render for EditorTabs {

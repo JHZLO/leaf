@@ -21,7 +21,6 @@ pub struct Palette {
     pub cur: u32,
     pub hover: u32,
     pub guide: u32,
-    #[expect(dead_code, reason = "drawn by the leaf-through tab corner (Phase 1)")]
     pub fold: u32,
     pub syn_title: u32,
     pub syn_mark: u32,
