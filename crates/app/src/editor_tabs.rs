@@ -144,12 +144,9 @@ impl EditorTabs {
         self.active.and_then(|i| self.tabs.get(i))
     }
 
-    #[expect(
-        dead_code,
-        reason = "asked before closing the window or switching folders (Phase 1)"
-    )]
-    pub fn has_unsaved(&self) -> bool {
-        self.tabs.iter().any(|t| t.dirty)
+    /// How many tabs have edits that are not on disk.
+    pub fn tabs_unsaved(&self) -> usize {
+        self.tabs.iter().filter(|t| t.dirty).count()
     }
 
     /// The cursor or selection lines of the active tab, counted from 1.

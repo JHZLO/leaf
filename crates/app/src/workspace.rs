@@ -13,13 +13,20 @@ use crate::{
     empty_state,
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, OpenFolder, PrevTab,
-        Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        Quit, Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{PanelEvent, ProjectPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     theme::{self, ZOOM_STEPS, c},
     title_bar,
 };
+
+/// What to do once unsaved changes may be dropped.
+enum AfterDiscard {
+    Quit,
+    CloseWindow,
+    OpenFolder(PathBuf),
+}
 
 pub struct Workspace {
     panel: Option<Entity<ProjectPanel>>,
@@ -92,6 +99,14 @@ impl Workspace {
                 gpui_kit::component::Theme::sync_system_appearance(Some(window), cx);
             }),
         ];
+        // The close button asks first when tabs have unsaved changes.
+        let this = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            this.update(cx, |this, cx| {
+                this.confirm_discard(AfterDiscard::CloseWindow, window, cx)
+            })
+            .unwrap_or(true)
+        });
         Self {
             panel: None,
             tabs,
@@ -178,6 +193,43 @@ impl Workspace {
         .detach();
     }
 
+    /// True when nothing would be lost. Otherwise asks, and does `then` only if the user discards.
+    fn confirm_discard(
+        &mut self,
+        then: AfterDiscard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let unsaved = self.tabs.read(cx).tabs_unsaved();
+        if unsaved == 0 {
+            return true;
+        }
+        let detail = if unsaved == 1 {
+            "1 file has unsaved changes.".to_string()
+        } else {
+            format!("{unsaved} files have unsaved changes.")
+        };
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Discard unsaved changes?",
+            Some(&detail),
+            &["Discard", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| match then {
+                AfterDiscard::Quit => cx.quit(),
+                AfterDiscard::CloseWindow => window.remove_window(),
+                AfterDiscard::OpenFolder(root) => this.set_root(root, window, cx),
+            });
+        })
+        .detach();
+        false
+    }
+
     /// What reopens next time: the folder, the tree, the tabs, the zoom.
     fn snapshot(&self, cx: &App) -> session::Session {
         let mut saved = session::Session {
@@ -235,7 +287,11 @@ impl Workspace {
             let Some(root) = paths.into_iter().next() else {
                 return;
             };
-            let _ = this.update_in(cx, |this, window, cx| this.set_root(root, window, cx));
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.confirm_discard(AfterDiscard::OpenFolder(root.clone()), window, cx) {
+                    this.set_root(root, window, cx);
+                }
+            });
         })
         .detach();
     }
@@ -388,6 +444,12 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::close_tab))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                // Without unsaved changes the app-wide handler quits.
+                if !this.confirm_discard(AfterDiscard::Quit, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &PrevTab, window, cx| {
                 this.tabs
                     .update(cx, |tabs, cx| tabs.activate_offset(-1, window, cx))
