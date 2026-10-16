@@ -10,6 +10,7 @@ use leaf_project::{paths, session};
 
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
+    empty_state,
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NextTab, OpenFolder, PrevTab,
         Save, TogglePreview, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
@@ -281,7 +282,10 @@ impl Render for Workspace {
                 None => paths::relative(&t.path),
             })
         };
-        let stem = tabs.error.clone().or(stem);
+        let stem = match self.panel {
+            Some(_) => tabs.error.clone().or(stem),
+            None => Some("No folder open".to_string()),
+        };
         let language = active.map(|t| t.language.to_string());
         let line_ending = active.map(|t| match t.line_ending {
             leaf_project::fs::LineEnding::Lf => "LF",
@@ -329,7 +333,10 @@ impl Render for Workspace {
                         self.panel.clone().filter(|_| self.tree_visible),
                         |el, panel| el.child(panel),
                     )
-                    .child(self.tabs.clone()),
+                    .map(|el| match self.panel {
+                        Some(_) => el.child(self.tabs.clone()),
+                        None => el.child(empty_state::render(cx)),
+                    }),
             )
             .child(status_bar::render(
                 Status {

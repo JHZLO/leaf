@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 
 mod editor_tabs;
+mod empty_state;
 mod keymap;
 mod menus;
 mod preview;
