@@ -132,6 +132,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", FocusEditor, panel),
         KeyBinding::new("cmd-shift-o", ToggleFinder, ws),
         KeyBinding::new("cmd-shift-f", ToggleSearch, ws),
+        // gpui-kit binds cmd-shift-f to replace inside its editor ("Input"), which would win there; the
+        // folder search takes it, and replace moves to cmd-r as in IntelliJ.
+        KeyBinding::new("cmd-shift-f", ToggleSearch, Some("Input")),
+        KeyBinding::new("cmd-r", gpui_kit::component::input::Replace, Some("Input")),
         KeyBinding::new("cmd-alt-r", RevealInFinder, ws),
         KeyBinding::new("cmd-n", NewFile, panel),
         KeyBinding::new("shift-f6", Rename, panel),
