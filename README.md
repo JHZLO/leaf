@@ -20,7 +20,42 @@ cargo run --release -p leaf -- ~/notes          # open a folder
 cargo run --release -p leaf -- ~/notes/todo.md  # open a file in its folder
 ```
 
-Without an argument leaf reopens the folder, tabs and tree you left.
+Without an argument leaf reopens the windows you left, each with its folder, tree and tabs.
+
+## Install
+
+There is no download yet; build the app from source:
+
+```bash
+scripts/bundle.sh         # target/bundle/leaf.app
+scripts/bundle.sh --dmg   # also target/bundle/leaf-<version>.dmg
+```
+
+Copy `target/bundle/leaf.app` to `/Applications` (or open the DMG and drag it there).
+Then Finder's Open With and `open -a leaf <folder or file>` open in leaf, a new window per folder.
+The app is signed ad hoc, which is enough on the Mac that built it; giving it to others would need
+a Developer ID signature and notarization.
+
+### The `leaf` command
+
+`scripts/leaf` opens folders and files from a terminal, starting leaf or handing them to the one
+already running:
+
+```bash
+leaf ~/notes            # the folder, in the window that has it or a new one
+leaf ~/notes/todo.md    # the file, in its folder's window
+leaf                    # start leaf, or bring it forward
+```
+
+To have it on your `PATH`, link it into a folder that is on `PATH`, from the repository root:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$PWD/scripts/leaf" ~/.local/bin/leaf
+```
+
+It opens `target/bundle/leaf.app` from this repository when that exists, else the `leaf.app`
+macOS knows about (the one in `/Applications`). Set `LEAF_APP=/path/to/leaf.app` to choose another.
 
 ## Keys
 
@@ -28,7 +63,8 @@ The keys follow IntelliJ IDEA.
 
 | Where | Keys | What |
 |---|---|---|
-| Anywhere | `Cmd+O` | Open a folder |
+| Anywhere | `Cmd+O` | Open a folder (in a new window when this one has a folder) |
+| | `Cmd+Shift+N` | New window |
 | | `Cmd+1` | Focus the tree (again: hide it) |
 | | `Cmd+Shift+O` | Find a file by name |
 | | `Cmd+Shift+C` | Copy the absolute path |
