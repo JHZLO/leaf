@@ -94,14 +94,9 @@ impl Preview {
         }
     }
 
-    /// Shows `source` now, dropping a pending update.
-    pub fn show(&mut self, source: Option<Entity<EditorState>>, cx: &mut Context<Self>) {
-        self.show_in(source, None, cx);
-    }
-
     /// Shows `source`, a file in `folder`, now, dropping a pending update. Images with a relative
     /// path load from `folder`; without one only absolute paths do.
-    pub fn show_in(
+    pub fn show(
         &mut self,
         source: Option<Entity<EditorState>>,
         folder: Option<PathBuf>,

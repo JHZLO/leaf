@@ -882,7 +882,11 @@ impl EditorTabs {
             return;
         };
         let source = self.preview_source();
-        preview.update(cx, |preview, cx| preview.show(source, cx));
+        // Relative image paths in the Markdown resolve against the file's own folder.
+        let folder = self
+            .active_tab()
+            .and_then(|t| self.root.join(&t.path).parent().map(Path::to_path_buf));
+        preview.update(cx, |preview, cx| preview.show(source, folder, cx));
     }
 
     /// The active tab's editor when it is Markdown, has the keyboard and takes edits. Anything

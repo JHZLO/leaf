@@ -95,7 +95,7 @@ fn shows_local_images(check: &mut Check) {
     fs::write(
         dir.path().join("pictures.md"),
         format!(
-            "# Pictures\n\n![A magenta block]({})\n\n![A picture that is not there](img/gone.png)\n\nThe end.\n",
+            "# Pictures\n\n![A magenta block]({})\n\n![The same block, relative](img/block.png)\n\n![A picture that is not there](img/gone.png)\n\nThe end.\n",
             picture.display()
         ),
     )
@@ -119,10 +119,10 @@ fn shows_local_images(check: &mut Check) {
         .pixels()
         .filter(|p| p[0] > 230 && p[1] < 40 && p[2] > 230)
         .count();
-    // 96 x 48 points; a Retina capture has four pixels to a point.
+    // Two 96 x 48 point blocks (absolute and relative path); a Retina capture has four pixels to a point.
     check.expect_eq(
-        "preview image: an image on disk shows",
-        magenta >= 96 * 48,
+        "preview image: images on disk show, by absolute and relative path",
+        magenta >= 2 * 96 * 48,
         true,
     );
 }
