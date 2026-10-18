@@ -1,0 +1,22 @@
+#!/bin/zsh
+# Opens folders and files in leaf: starts it, or hands them to the leaf already running.
+#   leaf [folder or file ...]
+# The app is $LEAF_APP, else the leaf.app scripts/bundle.sh builds in this repository, else the
+# leaf.app macOS knows (for example one copied to /Applications).
+set -euo pipefail
+
+# :A follows a symlink on PATH back to this repository.
+app=${LEAF_APP:-${0:A:h:h}/target/bundle/leaf.app}
+[[ -n ${LEAF_APP:-} || -d $app ]] || app=leaf
+
+paths=()
+for arg in "$@"; do
+  if [[ ! -e $arg ]]; then
+    echo "leaf: no such file or folder: $arg" >&2
+    exit 1
+  fi
+  # Absolute, so what reaches leaf never depends on how open reads a relative path.
+  paths+=("${arg:a}")
+done
+
+exec open -a "$app" "${paths[@]}"
