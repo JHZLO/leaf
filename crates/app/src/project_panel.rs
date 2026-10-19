@@ -380,7 +380,7 @@ impl ProjectPanel {
             Some(row) => row.path.parent().map(Path::to_path_buf).unwrap_or_default(),
             None => PathBuf::new(),
         };
-        if !dir.as_os_str().is_empty() && self.tree.expand(&dir) {
+        if self.tree.expand(&dir) {
             self.load_dir(dir.clone(), cx);
         }
         self.start_edit(EditTarget::New { dir }, "", 0..0, window, cx);
@@ -399,9 +399,11 @@ impl ProjectPanel {
             return;
         }
         let rows = self.tree.rows();
+        // The open folder's row renames nothing: the window is that folder.
         let Some(row) = self
             .tree
             .selected()
+            .filter(|s| !s.as_os_str().is_empty())
             .and_then(|s| rows.iter().find(|r| r.path == s))
         else {
             return;
@@ -420,7 +422,13 @@ impl ProjectPanel {
         if self.edit.is_some() {
             return;
         }
-        let Some(path) = self.tree.selected().map(Path::to_path_buf) else {
+        // Never the open folder itself, whose row is the first one.
+        let Some(path) = self
+            .tree
+            .selected()
+            .filter(|s| !s.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+        else {
             return;
         };
         self.search = None;
@@ -613,7 +621,7 @@ impl ProjectPanel {
         let Some(EditTarget::New { dir }) = self.edit.as_ref().map(|e| &e.target) else {
             return items;
         };
-        // Right under the folder's row, one level in. The open folder is no row: on top.
+        // Right under the folder's row, one level in.
         let (at, depth) = items
             .iter()
             .enumerate()
@@ -771,13 +779,15 @@ impl ProjectPanel {
 
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
     /// The part of the name a speed search for `query` matched is set in semibold.
-    /// With `rename`, the name is an input.
+    /// With `rename`, the name is an input. The open folder's row also shows `root_parent`,
+    /// the folder it sits in.
     fn render_row(
         row: &Row,
         selected: bool,
         focused: bool,
         query: Option<&str>,
         rename: Option<&EditView>,
+        root_parent: &SharedString,
         cx: &App,
     ) -> Stateful<Div> {
         let p = theme::colors(cx);
@@ -821,6 +831,23 @@ impl ProjectPanel {
         )
         .map(|el| match rename {
             Some(edit) => el.child(edit_field(edit, cx)),
+            None if row.path.as_os_str().is_empty() => el
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(name_label(&row.name, query)),
+                )
+                .child(
+                    // A long parent path loses its start, keeping the folders nearest the root.
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
+                        .text_size(z(12., cx))
+                        .text_color(c(p.sub))
+                        .child(root_parent.clone()),
+                ),
             None => el.child(name_label(&row.name, query)),
         })
     }
@@ -922,16 +949,14 @@ impl Render for ProjectPanel {
         let focused = self.focus_handle.contains_focused(window, cx);
         let rows = self.tree.rows();
         let selected = self.tree.selected().map(Path::to_path_buf);
-        let root = self.tree.root();
-        let root_name = root.file_name().map_or_else(
-            || root.display().to_string(),
-            |n| n.to_string_lossy().to_string(),
-        );
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let parent = root
+        let root_parent: SharedString = self
+            .tree
+            .root()
             .parent()
             .map(|parent| tilde(parent, home.as_deref()))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into();
         let selected_row = selected
             .as_ref()
             .and_then(|s| rows.iter().find(|r| &r.path == s))
@@ -1005,33 +1030,6 @@ impl Render for ProjectPanel {
             .border_r_1()
             .border_color(c(p.line))
             .text_size(z(size::UI_TEXT, cx))
-            .child(
-                div()
-                    .h(z(size::TREE_HEAD, cx))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(z(8., cx))
-                    .px(z(14., cx))
-                    .whitespace_nowrap()
-                    .child(
-                        div()
-                            .flex_none()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(c(p.ink))
-                            .child(root_name),
-                    )
-                    .child(
-                        // A long parent path loses its start, keeping the folders nearest the root.
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis_start()
-                            .text_size(z(12., cx))
-                            .text_color(c(p.sub))
-                            .child(parent),
-                    ),
-            )
             .when_some(self.search.clone(), |el, query| {
                 el.child(search_field(query, cx))
             })
@@ -1055,8 +1053,16 @@ impl Render for ProjectPanel {
                                 (Item::Row(row), Some(edit))
                                     if renaming.as_deref() == Some(row.path.as_path()) =>
                                 {
-                                    Self::render_row(row, true, focused, None, Some(edit), cx)
-                                        .into_any_element()
+                                    Self::render_row(
+                                        row,
+                                        true,
+                                        focused,
+                                        None,
+                                        Some(edit),
+                                        &root_parent,
+                                        cx,
+                                    )
+                                    .into_any_element()
                                 }
                                 (Item::Row(row), _) => {
                                     let (path, kind) = (row.path.clone(), row.kind);
@@ -1067,6 +1073,7 @@ impl Render for ProjectPanel {
                                         focused,
                                         query.as_deref(),
                                         None,
+                                        &root_parent,
                                         cx,
                                     )
                                     .on_click(move |event, _, cx| {
@@ -1117,6 +1124,7 @@ fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] 
         Some(row) if row.kind == EntryKind::Dir && row.loops => {
             &[("←", "Parent"), ("⌘⇧C", "Copy path")]
         }
+        Some(row) if row.path.as_os_str().is_empty() => &[("→", "Expand"), ("⌘⇧C", "Copy path")],
         Some(row) if row.kind == EntryKind::Dir => {
             &[("→", "Expand"), ("←", "Parent"), ("⌘⇧C", "Copy path")]
         }
@@ -1214,6 +1222,23 @@ mod tests {
         );
         assert_eq!(labels(Some(&folder(false, true))), ["Parent", "Copy path"]);
         assert_eq!(labels(None), ["Open", "Leaf through", "Copy path"]);
+    }
+
+    #[test]
+    fn the_open_folder_offers_no_parent() {
+        let root = Row {
+            path: PathBuf::new(),
+            ..folder(false, false)
+        };
+        assert_eq!(labels(Some(&root)), ["Expand", "Copy path"]);
+        let open = Row {
+            expanded: true,
+            ..root
+        };
+        assert_eq!(
+            labels(Some(&open)),
+            ["Collapse", "First child", "Copy path"]
+        );
     }
 
     #[test]

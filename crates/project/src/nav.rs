@@ -374,4 +374,41 @@ mod tests {
         assert_eq!(nav(Some("top.md"), NavKey::PageUp(2)), select("docs/a.md"));
         assert_eq!(nav(Some("docs/guide"), NavKey::PageUp(20)), select("docs"));
     }
+
+    #[test]
+    fn the_open_folder_is_reached_and_closed_like_any_folder() {
+        let entry = |name: &str, kind| crate::fs::DirEntry {
+            name: name.into(),
+            kind,
+            ignored: false,
+            loops: false,
+        };
+        let mut tree = crate::tree::ProjectTree::new(PathBuf::from("/project"));
+        tree.set_listing(
+            PathBuf::new(),
+            vec![
+                entry("docs", EntryKind::Dir),
+                entry("top.md", EntryKind::File),
+            ],
+        );
+        let rows = tree.rows();
+        let nav = |selected: &str, key| navigate(&rows, Some(Path::new(selected)), key);
+        // Up from the first item, Left from a top-level item and Home reach it (IntelliJ).
+        assert_eq!(nav("docs", NavKey::Up), select(""));
+        assert_eq!(nav("top.md", NavKey::Left), select(""));
+        assert_eq!(nav("top.md", NavKey::First), select(""));
+        assert_eq!(nav("", NavKey::Right), select("docs"));
+        assert_eq!(nav("", NavKey::Left), collapse(""));
+        // Closed, it has no parent to step out to; Right opens it again.
+        tree.collapse(Path::new(""));
+        let rows = tree.rows();
+        assert_eq!(
+            navigate(&rows, Some(Path::new("")), NavKey::Left),
+            nothing()
+        );
+        assert_eq!(
+            navigate(&rows, Some(Path::new("")), NavKey::Right),
+            expand("")
+        );
+    }
 }

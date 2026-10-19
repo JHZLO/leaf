@@ -99,7 +99,7 @@ pub fn run(check: &mut Check) {
     check.expect_eq("and keeps its own folder", root, Some(notes_root.clone()));
 
     // Both windows reach the session file, each with its own tree and tabs.
-    check.keys(second, "down right");
+    check.keys(second, "down down right");
     check
         .cx
         .update(|cx| workspace::open_path(&code_root.join("src/main.rs"), cx));

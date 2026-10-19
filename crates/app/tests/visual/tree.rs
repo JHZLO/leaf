@@ -13,6 +13,7 @@ pub fn run(check: &mut Check) {
     let was = check.cx.update(|cx| Theme::global(cx).mode);
     speed_search(check);
     new_file(check);
+    root_row(check);
     rename(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
@@ -23,7 +24,7 @@ fn tabs_follow(check: &mut Check) {
     let fixture = fixture();
     let window = open_light(check, fixture.path());
     // Open docs/notes.md, then rename it from the tree.
-    check.keys(window, "down right down down enter");
+    check.keys(window, "down down right down down enter");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
         "enter opens docs/notes.md",
@@ -66,7 +67,7 @@ fn speed_search(check: &mut Check) {
     let fixture = fixture();
     let window = open_light(check, fixture.path());
     // Open docs and docs/guide; the guide folder stays selected.
-    check.keys(window, "down right down right");
+    check.keys(window, "down down right down right");
     check.keys(window, ". m d");
     let selected = selection(check, window);
     check.expect_eq(
@@ -122,7 +123,7 @@ fn speed_search(check: &mut Check) {
 fn new_file(check: &mut Check) {
     let fixture = fixture();
     let window = open_light(check, fixture.path());
-    check.keys(window, "down cmd-n d r a f t s / i d e a . m d");
+    check.keys(window, "down down cmd-n d r a f t s / i d e a . m d");
     check.shot(window, "tree-2-new-file");
     check.keys(window, "enter");
     let created = fixture.path().join("docs/drafts/idea.md");
@@ -158,6 +159,35 @@ fn new_file(check: &mut Check) {
         "escape cancels the new name and keeps the tree focused",
         copied,
         Some("docs/drafts/idea.md".into()),
+    );
+}
+
+/// The open folder is the first row (IntelliJ): it can be selected, Cmd+N there makes a file at
+/// the top, and Cmd+Shift+C copies the folder's own path.
+fn root_row(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    check.keys(window, "down");
+    let selected = selection(check, window);
+    check.expect_eq(
+        "down from nothing selects the open folder",
+        selected,
+        Some(PathBuf::new()),
+    );
+    check.shot(window, "tree-7-root-row");
+    check.keys(window, "cmd-n t o d o . m d enter");
+    check.expect_eq(
+        "cmd-n on the open folder creates todo.md at the top",
+        fixture.path().join("todo.md").is_file(),
+        true,
+    );
+    check.keys(window, "cmd-1 home cmd-shift-c");
+    let copied = check.clipboard();
+    let root = fixture.path().canonicalize().expect("root");
+    check.expect_eq(
+        "cmd-shift-c on the open folder copies its path",
+        copied,
+        Some(root.to_string_lossy().to_string()),
     );
 }
 

@@ -23,9 +23,15 @@ pub fn tilde(path: &Path) -> String {
     }
 }
 
-/// `root` joined with `rel`, as one NFC string.
+/// `root` joined with `rel`, as one NFC string. The open folder itself (`rel` empty) is `root`
+/// without the trailing slash `join` would add.
 pub fn absolute(root: &Path, rel: &Path) -> String {
-    root.join(rel).to_string_lossy().nfc().collect()
+    let path = if rel.as_os_str().is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(rel)
+    };
+    path.to_string_lossy().nfc().collect()
 }
 
 /// `rel` with forward slashes and no trailing slash; the open folder itself is `.`.
@@ -76,6 +82,8 @@ mod tests {
             absolute(root, Path::new(&rel)),
             format!("/Users/me/notes/docs/{HANGUL_NFC}.md")
         );
+        // The open folder's own row copies the folder, with no trailing slash.
+        assert_eq!(absolute(root, Path::new("")), "/Users/me/notes");
     }
 
     #[test]

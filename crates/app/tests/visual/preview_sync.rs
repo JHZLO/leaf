@@ -47,7 +47,7 @@ fn follows_the_editor(check: &mut Check) {
     fs::write(dir.path().join("long.md"), text).expect("write");
     let window = check.open(Some(dir.path()));
 
-    check.keys(window, "down enter cmd-shift-v");
+    check.keys(window, "down down enter cmd-shift-v");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
         "preview sync: enter opens long.md",
@@ -103,7 +103,7 @@ fn shows_local_images(check: &mut Check) {
     let window = check.open(Some(dir.path()));
 
     // The img folder comes first in the tree.
-    check.keys(window, "down down enter cmd-shift-v");
+    check.keys(window, "down down down enter cmd-shift-v");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
         "preview image: enter opens pictures.md",

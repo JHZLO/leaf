@@ -11,7 +11,7 @@ pub fn run(check: &mut Check) {
 
     // The tree: walk into docs/guide with the arrow keys; the vein follows the selection.
     let window = check.open(Some(fixture.path()));
-    check.keys(window, "down right down right down down");
+    check.keys(window, "down down right down right down down");
     let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
     check.expect_eq(
         "arrow keys select docs/guide/paths.md",

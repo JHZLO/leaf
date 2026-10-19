@@ -24,7 +24,7 @@ pub fn run(check: &mut Check) {
     fs::write(dir.path().join("main.rs"), "").expect("write");
     let window = check.open(Some(dir.path()));
 
-    check.keys(window, "down enter");
+    check.keys(window, "down down enter");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
         "enter opens list.md",

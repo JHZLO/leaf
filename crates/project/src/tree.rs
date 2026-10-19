@@ -1,5 +1,6 @@
 //! The folder tree as the panel shows it: which folders are open, what each holds, what is selected.
-//! Paths here are relative to the open folder; the folder itself is the empty path.
+//! Paths here are relative to the open folder; the folder itself is the empty path, and like
+//! IntelliJ it is the first row, so it can be selected (Cmd+N there makes a file at the top).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -42,11 +43,12 @@ pub struct ProjectTree {
 }
 
 impl ProjectTree {
+    /// The open folder starts open.
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             listings: HashMap::new(),
-            expanded: HashSet::new(),
+            expanded: HashSet::from([PathBuf::new()]),
             selected: None,
         }
     }
@@ -99,8 +101,6 @@ impl ProjectTree {
         let neighbor = entries.get(at).or_else(|| entries.get(at.checked_sub(1)?));
         self.selected = match neighbor {
             Some(entry) => Some(dir.join(&entry.name)),
-            // The open folder is not a row; with nothing left in it, nothing is selected.
-            None if dir.as_os_str().is_empty() => None,
             None => Some(dir.to_path_buf()),
         };
     }
@@ -149,8 +149,13 @@ impl ProjectTree {
         }
     }
 
+    /// The open folders inside the open folder, which a session keeps. The open folder itself is
+    /// left out: it opens again on its own.
     pub fn expanded_dirs(&self) -> impl Iterator<Item = &Path> {
-        self.expanded.iter().map(PathBuf::as_path)
+        self.expanded
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|dir| !dir.as_os_str().is_empty())
     }
 
     pub fn selected(&self) -> Option<&Path> {
@@ -165,11 +170,8 @@ impl ProjectTree {
     /// listings still need reading, outermost first. A folder that loops stops the walk: the
     /// tree never shows what is inside it.
     pub fn reveal(&mut self, path: &Path) -> Vec<PathBuf> {
-        let mut above: Vec<&Path> = path
-            .ancestors()
-            .skip(1)
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .collect();
+        // The open folder is among them: it may have been closed.
+        let mut above: Vec<&Path> = path.ancestors().skip(1).collect();
         above.reverse();
         let mut unread = Vec::new();
         for dir in above {
@@ -223,10 +225,28 @@ impl ProjectTree {
         self.expanded.retain(|dir| !dir.starts_with(path));
     }
 
-    /// The visible rows, depth first, with the vein toward the selection.
+    /// The visible rows, depth first, with the vein toward the selection. The open folder is the
+    /// first row, at depth 0.
     pub fn rows(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
-        self.push_rows(Path::new(""), 0, &mut rows);
+        let root = Path::new("");
+        let expanded = self.expanded.contains(root);
+        let name = self.root.file_name().map_or_else(
+            || self.root.display().to_string(),
+            crate::paths::display_name,
+        );
+        let mut rows = vec![Row {
+            path: PathBuf::new(),
+            name,
+            depth: 0,
+            kind: EntryKind::Dir,
+            expanded,
+            ignored: false,
+            loops: false,
+            guides: Vec::new(),
+        }];
+        if expanded {
+            self.push_rows(root, 1, &mut rows);
+        }
         self.mark_vein(&mut rows);
         rows
     }
@@ -260,12 +280,9 @@ impl ProjectTree {
         let Some(selected) = &self.selected else {
             return;
         };
-        // The selection's ancestors at each depth, and the row of each one on the path.
-        let chain: Vec<PathBuf> = selected
-            .ancestors()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .collect();
+        // The selection's ancestors at each depth, from the open folder down, and the row of
+        // each one on the path.
+        let chain: Vec<PathBuf> = selected.ancestors().map(Path::to_path_buf).collect();
         let chain: Vec<PathBuf> = chain.into_iter().rev().collect();
         let index_of = |path: &Path, rows: &[Row]| rows.iter().position(|r| r.path == path);
         for level in 0..chain.len().saturating_sub(1) {
@@ -364,11 +381,11 @@ mod tests {
     }
 
     #[test]
-    fn a_vanished_only_top_level_item_leaves_nothing_selected() {
+    fn a_vanished_only_top_level_item_moves_the_selection_to_the_open_folder() {
         let mut tree = tree_with(&[("", vec![file("a.md")])]);
         tree.select(Some("a.md".into()));
         tree.set_listing("".into(), vec![]);
-        assert_eq!(selected(&tree), None);
+        assert_eq!(selected(&tree), Some(""));
     }
 
     #[test]
@@ -448,14 +465,34 @@ mod tests {
         assert_eq!(
             summary,
             [
-                ("docs", 0, true),
-                ("docs/guide", 1, true),
-                ("docs/guide/a.md", 2, false),
-                ("docs/guide/b.md", 2, false),
-                ("docs/readme.md", 1, false),
-                ("src", 0, false),
-                ("top.md", 0, false),
+                ("", 0, true),
+                ("docs", 1, true),
+                ("docs/guide", 2, true),
+                ("docs/guide/a.md", 3, false),
+                ("docs/guide/b.md", 3, false),
+                ("docs/readme.md", 2, false),
+                ("src", 1, false),
+                ("top.md", 1, false),
             ]
+        );
+        assert_eq!(rows[0].name, "project");
+        assert_eq!(rows[0].kind, EntryKind::Dir);
+    }
+
+    #[test]
+    fn the_open_folder_closes_and_opens_like_any_folder() {
+        let mut tree = sample();
+        tree.select(Some("docs/readme.md".into()));
+        tree.collapse(Path::new(""));
+        assert_eq!(selected(&tree), Some(""));
+        assert_eq!(summary(&tree), [("".to_string(), false)]);
+        // Its listing stays, so opening it again reads nothing.
+        assert!(!tree.expand(Path::new("")));
+        assert_eq!(tree.rows().len(), 8);
+        // A session keeps the folders inside it, not the open folder itself.
+        assert_eq!(
+            tree.expanded_dirs().collect::<HashSet<_>>(),
+            HashSet::from([Path::new("docs"), Path::new("docs/guide")])
         );
     }
 
@@ -466,13 +503,14 @@ mod tests {
         assert_eq!(
             guides(&tree),
             expect(&[
-                ("docs", &[]),
-                ("docs/guide", &[TICK]),
-                ("docs/guide/a.md", &[PLAIN, VEIN]),
-                ("docs/guide/b.md", &[PLAIN, TICK]),
-                ("docs/readme.md", &[PLAIN]),
-                ("src", &[]),
-                ("top.md", &[]),
+                ("", &[]),
+                ("docs", &[TICK]),
+                ("docs/guide", &[PLAIN, TICK]),
+                ("docs/guide/a.md", &[PLAIN, PLAIN, VEIN]),
+                ("docs/guide/b.md", &[PLAIN, PLAIN, TICK]),
+                ("docs/readme.md", &[PLAIN, PLAIN]),
+                ("src", &[PLAIN]),
+                ("top.md", &[PLAIN]),
             ])
         );
     }
@@ -484,13 +522,14 @@ mod tests {
         assert_eq!(
             guides(&tree),
             expect(&[
-                ("docs", &[]),
-                ("docs/guide", &[TICK]),
-                ("docs/guide/a.md", &[PLAIN, PLAIN]),
-                ("docs/guide/b.md", &[PLAIN, PLAIN]),
-                ("docs/readme.md", &[PLAIN]),
-                ("src", &[]),
-                ("top.md", &[]),
+                ("", &[]),
+                ("docs", &[TICK]),
+                ("docs/guide", &[PLAIN, TICK]),
+                ("docs/guide/a.md", &[PLAIN, PLAIN, PLAIN]),
+                ("docs/guide/b.md", &[PLAIN, PLAIN, PLAIN]),
+                ("docs/readme.md", &[PLAIN, PLAIN]),
+                ("src", &[PLAIN]),
+                ("top.md", &[PLAIN]),
             ])
         );
     }
@@ -502,19 +541,20 @@ mod tests {
         assert_eq!(
             guides(&tree),
             expect(&[
-                ("docs", &[]),
-                ("docs/guide", &[VEIN]),
-                ("docs/guide/a.md", &[VEIN, PLAIN]),
-                ("docs/guide/b.md", &[VEIN, PLAIN]),
-                ("docs/readme.md", &[TICK]),
-                ("src", &[]),
-                ("top.md", &[]),
+                ("", &[]),
+                ("docs", &[TICK]),
+                ("docs/guide", &[PLAIN, VEIN]),
+                ("docs/guide/a.md", &[PLAIN, VEIN, PLAIN]),
+                ("docs/guide/b.md", &[PLAIN, VEIN, PLAIN]),
+                ("docs/readme.md", &[PLAIN, TICK]),
+                ("src", &[PLAIN]),
+                ("top.md", &[PLAIN]),
             ])
         );
     }
 
     #[test]
-    fn no_vein_for_a_top_level_selection_or_none() {
+    fn no_vein_without_a_selection_or_on_the_open_folder() {
         let mut tree = sample();
         let all_plain = |tree: &ProjectTree| {
             tree.rows()
@@ -522,10 +562,27 @@ mod tests {
                 .all(|r| r.guides.iter().all(|g| *g == PLAIN))
         };
         assert!(all_plain(&tree));
+        tree.select(Some("".into()));
+        assert!(all_plain(&tree));
+    }
+
+    #[test]
+    fn a_top_level_selection_has_its_vein_from_the_open_folder() {
+        let mut tree = sample();
         tree.select(Some("top.md".into()));
-        assert!(all_plain(&tree));
-        tree.select(Some("docs".into()));
-        assert!(all_plain(&tree));
+        assert_eq!(
+            guides(&tree),
+            expect(&[
+                ("", &[]),
+                ("docs", &[VEIN]),
+                ("docs/guide", &[VEIN, PLAIN]),
+                ("docs/guide/a.md", &[VEIN, PLAIN, PLAIN]),
+                ("docs/guide/b.md", &[VEIN, PLAIN, PLAIN]),
+                ("docs/readme.md", &[VEIN, PLAIN]),
+                ("src", &[VEIN]),
+                ("top.md", &[TICK]),
+            ])
+        );
     }
 
     #[test]
@@ -534,7 +591,7 @@ mod tests {
         tree.select(Some("docs/guide/a.md".into()));
         tree.collapse(Path::new("docs"));
         assert_eq!(selected(&tree), Some("docs"));
-        assert_eq!(tree.rows().len(), 3);
+        assert_eq!(tree.rows().len(), 4);
         // A selection outside the folder stays.
         tree.select(Some("top.md".into()));
         tree.expand(Path::new("docs"));
@@ -580,8 +637,10 @@ mod tests {
                 .iter()
                 .any(|r| r.path == Path::new("docs/guide/b.md"))
         );
-        // A top-level item has nothing above it to open.
+        // A top-level item has nothing above it to open but the open folder, which may be closed.
+        tree.collapse(Path::new(""));
         assert!(tree.reveal(Path::new("top.md")).is_empty());
+        assert!(tree.is_expanded(Path::new("")));
         assert_eq!(selected(&tree), Some("top.md"));
     }
 
@@ -612,6 +671,7 @@ mod tests {
         assert_eq!(selected(&tree), Some("docs/manual/b.md"));
         assert!(!tree.is_expanded(Path::new("docs/guide")));
         let want = [
+            ("", true),
             ("docs", true),
             ("docs/manual", true),
             ("docs/manual/a.md", false),
@@ -632,7 +692,7 @@ mod tests {
         tree.select(Some("a.md".into()));
         tree.renamed(Path::new("a.md"), Path::new("d.md"));
         let names: Vec<String> = tree.rows().into_iter().map(|r| r.name).collect();
-        assert_eq!(names, ["b.md", "c.md", "d.md"]);
+        assert_eq!(names, ["project", "b.md", "c.md", "d.md"]);
         assert_eq!(selected(&tree), Some("d.md"));
     }
 
@@ -690,8 +750,8 @@ mod tests {
         tree.set_listing("".into(), vec![looping]);
         tree.set_listing("self".into(), vec![dir("self")]);
         let rows = tree.rows();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].loops);
-        assert!(!rows[0].expanded);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[1].loops);
+        assert!(!rows[1].expanded);
     }
 }
