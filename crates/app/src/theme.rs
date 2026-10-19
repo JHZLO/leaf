@@ -45,7 +45,7 @@ pub const LIGHT: Palette = Palette {
     ignored: 0xA29B8F,
     accent: 0x4A7A2C,
     accent_text: 0x3E6A22,
-    sel_bg: 0xDCE6CE,
+    sel_bg: 0xC3D6AD,
     sel_ink: 0x26401A,
     cur: 0xF0ECE3,
     hover: 0xE7E2D7,
@@ -75,7 +75,7 @@ pub const DARK: Palette = Palette {
     ignored: 0x776F63,
     accent: 0x8DBF6A,
     accent_text: 0x9CCB78,
-    sel_bg: 0x2F3B25,
+    sel_bg: 0x46623A,
     sel_ink: 0xD6EBC4,
     cur: 0x2A2723,
     hover: 0x24221E,
@@ -169,6 +169,21 @@ fn hex(value: u32) -> String {
     format!("#{value:06X}")
 }
 
+/// How opaque gpui-kit lets the editor selection be: it caps the theme's selection color at 30%.
+pub(crate) const SELECTION_ALPHA: f32 = 0.3;
+
+/// The selection color to hand gpui-kit so that, drawn at its 30% over the paper, it comes out as
+/// `sel_bg`, the selection leaf's own views paint. Given `sel_bg` itself, a drag was barely visible.
+pub(crate) fn editor_selection(p: &Palette) -> u32 {
+    let channel = |shift: u32| {
+        let wanted = ((p.sel_bg >> shift) & 0xFF) as f32;
+        let paper = ((p.paper >> shift) & 0xFF) as f32;
+        let value = (wanted - (1. - SELECTION_ALPHA) * paper) / SELECTION_ALPHA;
+        (value.round().clamp(0., 255.) as u32) << shift
+    };
+    channel(16) | channel(8) | channel(0)
+}
+
 fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Value {
     let style = |color: u32| serde_json::json!({ "color": hex(color) });
     serde_json::json!({
@@ -187,7 +202,7 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
             "input.border": hex(p.line),
             "ring": hex(p.accent),
             "caret": hex(p.accent),
-            "selection.background": hex(p.sel_bg),
+            "selection.background": hex(editor_selection(p)),
             "muted.background": hex(p.side),
             "muted.foreground": hex(p.sub),
             "accent.background": hex(p.hover),

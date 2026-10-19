@@ -153,6 +153,24 @@ mod tests {
         assert_eq!(path_from_url("file:///"), Some(PathBuf::from("/")));
     }
 
+    /// Here rather than in theme.rs: a test there trips the recursion limit its `json!` needs.
+    #[test]
+    fn the_editor_selection_blends_to_the_selection_color() {
+        use crate::theme::{DARK, LIGHT, SELECTION_ALPHA, editor_selection};
+        for p in [&LIGHT, &DARK] {
+            let given = editor_selection(p);
+            for shift in [16, 8, 0] {
+                let channel = |value: u32| ((value >> shift) & 0xFF) as f32;
+                let blended =
+                    SELECTION_ALPHA * channel(given) + (1. - SELECTION_ALPHA) * channel(p.paper);
+                assert!(
+                    (blended - channel(p.sel_bg)).abs() <= 1.,
+                    "{given:06X} at {shift}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn other_urls_are_not_paths() {
         assert_eq!(path_from_url("https://example.com/a.md"), None);
