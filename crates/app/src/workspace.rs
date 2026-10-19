@@ -14,14 +14,15 @@ use crate::{
     empty_state,
     finder::{self, Finder, FinderEvent},
     keymap::{
-        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewWindow, NextTab, Open,
-        OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder,
-        TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewTerminal, NewWindow,
+        NextTab, Open, OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev,
+        ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut,
+        ZoomReset,
     },
     project_panel::{FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
-    terminal_panel::{TerminalEvent, TerminalPanel},
+    terminal_tabs::{TerminalTabs, TerminalTabsEvent},
     theme::{self, ZOOM_STEPS, c, size, z},
     title_bar,
 };
@@ -41,9 +42,9 @@ enum OverlayView {
 /// What the gap above the terminal drags; the terminal resizes as it moves.
 struct TerminalResize;
 
-/// The shell under the editor, kept while hidden so its session survives Alt+F12.
+/// The shells under the editor, kept while hidden so they survive Alt+F12.
 struct Terminal {
-    view: Entity<TerminalPanel>,
+    view: Entity<TerminalTabs>,
     visible: bool,
     _subscription: Subscription,
 }
@@ -633,19 +634,32 @@ impl Workspace {
         (tree, self.terminal_height)
     }
 
-    /// The lines the terminal shows, when it is open; for the UI checks.
+    /// The lines the terminal in front shows, when the terminal is open; for the UI checks.
     pub fn terminal_lines(&self, cx: &App) -> Option<Vec<String>> {
         let terminal = self.terminal.as_ref().filter(|t| t.visible)?;
         Some(terminal.view.read(cx).visible_lines(cx))
     }
 
+    /// How many terminal tabs there are; for the UI checks.
+    pub fn terminal_tabs(&self, cx: &App) -> usize {
+        self.terminal.as_ref().map_or(0, |t| t.view.read(cx).len())
+    }
+
     fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
-        self.terminal.as_ref().is_some_and(|t| {
-            t.view
-                .read(cx)
-                .focus_handle(cx)
-                .contains_focused(window, cx)
-        })
+        self.terminal
+            .as_ref()
+            .is_some_and(|t| t.view.read(cx).contains_focused(window, cx))
+    }
+
+    /// Gives the keyboard to the terminal tab in front.
+    fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
+        let handle = self
+            .terminal
+            .as_ref()
+            .and_then(|t| t.view.read(cx).focus_handle(cx));
+        if let Some(handle) = handle {
+            handle.focus(window, cx);
+        }
     }
 
     /// Alt+F12, as in IntelliJ: shows the terminal (starting a shell when there is none) and gives
@@ -659,9 +673,23 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if let Some(terminal) = self.show_terminal(window, cx) {
-            terminal.view.read(cx).focus_handle(cx).focus(window, cx);
+        if self.show_terminal(window, cx).is_some() {
+            self.focus_terminal(window, cx);
         }
+        cx.notify();
+    }
+
+    /// Cmd+T, as in IntelliJ's terminal: a new shell in its own tab, in front and with the keyboard.
+    fn new_terminal(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        let existed = self.terminal.is_some();
+        let Some(view) = self.show_terminal(window, cx).map(|t| t.view.clone()) else {
+            return;
+        };
+        // A terminal that was just started already has its first tab.
+        if existed && !view.update(cx, |tabs, cx| tabs.add(window, cx)) {
+            return;
+        }
+        self.focus_terminal(window, cx);
         cx.notify();
     }
 
@@ -670,22 +698,17 @@ impl Workspace {
     fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<&Terminal> {
         if self.terminal.is_none() {
             let root = self.root(cx)?;
-            let started = match TerminalPanel::start(&root) {
-                Ok(started) => started,
-                Err(err) => {
-                    eprintln!("leaf: could not start the shell: {err}");
-                    return None;
-                }
-            };
-            let view = cx.new(|cx| TerminalPanel::new(started, window, cx));
+            let view = cx.new(|_| TerminalTabs::new(root));
+            if !view.update(cx, |tabs, cx| tabs.add(window, cx)) {
+                return None;
+            }
             let subscription = cx.subscribe_in(
                 &view,
                 window,
-                |this, _, event: &TerminalEvent, window, cx| match event {
-                    TerminalEvent::Exited => {
-                        let had_focus = this.terminal_focused(window, cx);
+                |this, _, event: &TerminalTabsEvent, window, cx| match event {
+                    TerminalTabsEvent::Empty { had_focus } => {
                         this.terminal = None;
-                        if had_focus {
+                        if *had_focus {
                             this.focus_editor_area(window, cx);
                         }
                         cx.notify();
@@ -1073,6 +1096,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_finder))
             .on_action(cx.listener(Self::toggle_search))
             .on_action(cx.listener(Self::toggle_terminal))
+            .on_action(cx.listener(Self::new_terminal))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))

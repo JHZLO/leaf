@@ -14,6 +14,7 @@ mod project_panel;
 mod search_panel;
 mod status_bar;
 mod terminal_panel;
+mod terminal_tabs;
 pub mod theme;
 mod title_bar;
 pub mod workspace;

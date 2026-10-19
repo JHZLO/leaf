@@ -68,9 +68,30 @@ pub fn run(check: &mut Check) {
     });
     check.expect_eq("the hidden shell lives on", kept, true);
 
+    // Cmd+T: a second shell in its own tab, in front.
+    check.keys(window, "cmd-t");
+    let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("cmd-t opens a second terminal tab", tabs, 2);
+    let fresh = wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$')) && !lines.iter().any(|l| l == "hi")
+    });
+    check.expect_eq("the new tab is a fresh shell", fresh, true);
+    check.keys(window, "e c h o space t w o enter");
+    let two = wait_for(check, window, |lines| lines.iter().any(|l| l == "two"));
+    check.expect_eq("keys go to the tab in front", two, true);
+    check.shot(window, "terminal-2-tabs");
+    check.keys(window, "cmd-shift-[");
+    let first = wait_for(check, window, |lines| lines.iter().any(|l| l == "hi"));
+    check.expect_eq("cmd-shift-[ goes back to the first tab", first, true);
+    check.keys(window, "cmd-w");
+    let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("cmd-w closes the tab in front", tabs, 1);
+    let left = wait_for(check, window, |lines| lines.iter().any(|l| l == "two"));
+    check.expect_eq("the other tab comes to the front", left, true);
+
     check.keys(window, "e x i t enter");
     let closed = wait_for_workspace(check, window, |w, cx| w.terminal_lines(cx).is_none());
-    check.expect_eq("exit closes the terminal", closed, true);
+    check.expect_eq("exit in the last tab closes the terminal", closed, true);
 }
 
 /// The shell answers on its own thread; give it up to five seconds.

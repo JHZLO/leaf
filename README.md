@@ -76,6 +76,7 @@ The keys follow IntelliJ IDEA.
 | | `Cmd+Shift+V` | Markdown preview |
 | | `Cmd+=`, `Cmd+-`, `Cmd+0` | Zoom in, out, back to 100% |
 | | `Alt+F12` | Focus the terminal, which opens with the folder (in the terminal: hide it, the shell keeps running) |
+| | `Cmd+T` | New terminal tab |
 | Tree | `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown` | Move |
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
 | | `Enter` | Open the file (or toggle the folder) |
@@ -84,6 +85,7 @@ The keys follow IntelliJ IDEA.
 | | `Cmd+N`, `Shift+F6`, `Cmd+Backspace` | New file (`name/` for a folder), rename, move to the Trash |
 | | `Esc` | Back to the editor |
 | Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
+| | `Cmd+W`, `Cmd+Shift+[` / `]` | Close the terminal tab, previous / next terminal tab |
 | Markdown | `Enter`, `Tab`, `Shift+Tab` | Continue a list, indent or outdent a list item |
 | | `Cmd+B`, `Cmd+I` | Bold, italic |
 

@@ -136,6 +136,7 @@ pub mod size {
     pub const ISLAND_RADIUS: f32 = 8.;
     pub const TERMINAL_HEIGHT: f32 = 260.;
     pub const TERMINAL_MIN: f32 = 80.;
+    pub const TERMINAL_TABS: f32 = 30.;
     /// The terminal's line height, as a multiple of its text size.
     pub const TERMINAL_LINE: f32 = 1.3;
 }
