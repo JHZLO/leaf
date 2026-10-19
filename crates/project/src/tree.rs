@@ -151,6 +151,17 @@ impl ProjectTree {
 
     /// The open folders inside the open folder, which a session keeps. The open folder itself is
     /// left out: it opens again on its own.
+    /// Closes every folder but the open folder itself (IntelliJ's Collapse All). A selection inside
+    /// one moves up to its top-level folder.
+    pub fn collapse_all(&mut self) {
+        self.expanded.retain(|dir| dir.as_os_str().is_empty());
+        if let Some(selected) = &self.selected
+            && let Some(top) = selected.components().next()
+        {
+            self.selected = Some(PathBuf::from(top.as_os_str()));
+        }
+    }
+
     pub fn expanded_dirs(&self) -> impl Iterator<Item = &Path> {
         self.expanded
             .iter()
@@ -597,6 +608,27 @@ mod tests {
         tree.expand(Path::new("docs"));
         tree.collapse(Path::new("docs"));
         assert_eq!(selected(&tree), Some("top.md"));
+    }
+
+    #[test]
+    fn collapse_all_leaves_the_top_level_and_lifts_the_selection() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/a.md".into()));
+        tree.collapse_all();
+        assert_eq!(
+            summary(&tree),
+            [
+                ("", true),
+                ("docs", false),
+                ("src", false),
+                ("top.md", false)
+            ]
+            .map(|(p, e)| (p.to_string(), e))
+            .to_vec()
+        );
+        assert_eq!(selected(&tree), Some("docs"));
+        // Listings stay, so opening a folder again reads nothing.
+        assert!(!tree.expand(Path::new("docs")));
     }
 
     #[test]

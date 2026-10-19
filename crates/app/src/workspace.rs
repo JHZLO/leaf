@@ -402,7 +402,7 @@ impl Workspace {
         self._subscriptions.push(cx.subscribe_in(
             &panel,
             window,
-            |this, _, event: &PanelEvent, window, cx| match event {
+            |this, panel, event: &PanelEvent, window, cx| match event {
                 PanelEvent::Open { path, leaf_through } => {
                     let leaf_through = *leaf_through;
                     this.tabs
@@ -410,6 +410,17 @@ impl Workspace {
                     if !leaf_through {
                         this.focus_editor_area(window, cx);
                     }
+                }
+                PanelEvent::Locate => {
+                    if let Some(file) = this.active_file(cx) {
+                        panel.update(cx, |panel, cx| panel.reveal(&file, cx));
+                    }
+                    panel.read(cx).focus_handle(cx).focus(window, cx);
+                }
+                PanelEvent::Hide => {
+                    this.tree_visible = false;
+                    this.focus_editor_area(window, cx);
+                    cx.notify();
                 }
             },
         ));
@@ -604,6 +615,12 @@ impl Workspace {
     }
 
     /// The tree's selection, relative to the open folder.
+    /// The open folders in the tree, or None when the tree is hidden; for the UI checks.
+    pub fn tree_expanded(&self, cx: &App) -> Option<Vec<PathBuf>> {
+        let panel = self.panel.as_ref().filter(|_| self.tree_visible)?;
+        Some(panel.read(cx).expanded_dirs())
+    }
+
     pub fn tree_selection(&self, cx: &App) -> Option<PathBuf> {
         self.panel
             .as_ref()?

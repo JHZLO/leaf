@@ -1,14 +1,17 @@
 //! The folder tree on the left: the vein toward the selection, key hints, and IntelliJ moves.
 
 use std::{
+    collections::VecDeque,
     ops::Range,
     path::{Path, PathBuf},
 };
 
 use gpui_kit::{
+    assets::IconName,
     component::{
         Icon,
         input::{Input, InputEvent, InputState},
+        tooltip::Tooltip,
     },
     prelude::FluentBuilder as _,
     *,
@@ -22,8 +25,9 @@ use leaf_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
-        Rename, SelectFirst, SelectLast, SelectNext, SelectPrev, Trash,
+        Collapse, CopyPath, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL,
+        PageDown, PageUp, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
+        Trash,
     },
     theme::{self, c, size, z},
 };
@@ -88,7 +92,23 @@ fn tilde(path: &Path, home: Option<&Path>) -> String {
 pub enum PanelEvent {
     /// Open a file. `leaf_through` keeps focus in the tree and reuses the leaf-through tab.
     Open { path: PathBuf, leaf_through: bool },
+    /// The header's locate button: select the active tab's file (IntelliJ's Select Opened File).
+    Locate,
+    /// The header's minus: hide the tree, as Cmd+1 in it does.
+    Hide,
 }
+
+/// A small list floating over the tree.
+enum Menu {
+    /// Cmd+N or the header's plus, as IntelliJ's New popup: whether to make a file or a folder in
+    /// `dir`. `choice` is the highlighted line (0 File, 1 Directory).
+    New { dir: PathBuf, choice: usize },
+    /// The header's more button.
+    Options,
+}
+
+/// What Expand All reads at most, so a huge folder does not flood the tree.
+const EXPAND_ALL_MOST: usize = 300;
 
 /// Items the tree changed on disk, so open tabs can follow. Paths are relative to the open
 /// folder; a folder's event covers everything inside it.
@@ -113,6 +133,7 @@ pub struct ProjectPanel {
     reveal_pending: bool,
     /// A name being typed into the tree (Cmd+N, Shift+F6).
     edit: Option<Edit>,
+    menu: Option<Menu>,
 }
 
 /// A name being typed into the tree, in an input on its own line.
@@ -128,8 +149,8 @@ struct Edit {
 
 #[derive(Clone)]
 enum EditTarget {
-    /// A new file, or a folder when the name ends in `/`, inside `dir`.
-    New { dir: PathBuf },
+    /// A new file, or a folder, inside `dir`. A name ending in `/` is a folder either way.
+    New { dir: PathBuf, kind: EntryKind },
     /// A new name for the item at `path`.
     Rename { path: PathBuf },
 }
@@ -188,6 +209,7 @@ impl ProjectPanel {
             focus_out: None,
             reveal_pending: false,
             edit: None,
+            menu: None,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -296,6 +318,11 @@ impl ProjectPanel {
         if self.edit.is_some() {
             return;
         }
+        if let Some(Menu::New { choice, .. }) = &mut self.menu {
+            *choice = if key == NavKey::Up { 0 } else { 1 };
+            cx.notify();
+            return;
+        }
         match (&self.search, key) {
             (Some(_), NavKey::Up) => self.search_step(SearchStep::Prev, cx),
             (Some(_), _) => self.search_step(SearchStep::Next, cx),
@@ -325,6 +352,16 @@ impl ProjectPanel {
         }
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
+        // F and D pick in the New popup, as the first letters of its lines.
+        if matches!(self.menu, Some(Menu::New { .. })) {
+            match keystroke.key.as_str() {
+                "f" => self.choose_new(EntryKind::File, window, cx),
+                "d" => self.choose_new(EntryKind::Dir, window, cx),
+                _ => {}
+            }
+            cx.stop_propagation();
+            return;
+        }
         // Option types special characters on macOS; leave it, like Cmd and Ctrl, to shortcuts.
         if modifiers.platform || modifiers.control || modifiers.alt || modifiers.function {
             return;
@@ -357,7 +394,9 @@ impl ProjectPanel {
     /// Escape cancels a name being typed or clears a speed search; with neither, it goes on
     /// to focus the editor.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.edit.is_some() {
+        if self.menu.take().is_some() {
+            cx.notify();
+        } else if self.edit.is_some() {
             self.end_edit(window, cx);
         } else if self.search.take().is_some() {
             cx.notify();
@@ -366,11 +405,13 @@ impl ProjectPanel {
         }
     }
 
-    /// Cmd+N: an input for a new item under the selected folder, or the selected file's folder.
+    /// Cmd+N: asks whether to make a file or a folder (IntelliJ's New popup), for the selected
+    /// folder or the selected file's folder.
     fn new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.edit.is_some() {
             return;
         }
+        self.watch_focus(window, cx);
         self.search = None;
         let rows = self.tree.rows();
         let selected = self
@@ -385,7 +426,17 @@ impl ProjectPanel {
         if self.tree.expand(&dir) {
             self.load_dir(dir.clone(), cx);
         }
-        self.start_edit(EditTarget::New { dir }, "", 0..0, window, cx);
+        self.menu = Some(Menu::New { dir, choice: 0 });
+        self.reveal_selection();
+        cx.notify();
+    }
+
+    /// The New popup's choice: an input for the new item's name, right under its folder.
+    fn choose_new(&mut self, kind: EntryKind, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Menu::New { dir, .. }) = self.menu.take() else {
+            return;
+        };
+        self.start_edit(EditTarget::New { dir, kind }, "", 0..0, window, cx);
         if let Some(index) = self
             .items(self.tree.rows())
             .iter()
@@ -393,6 +444,187 @@ impl ProjectPanel {
         {
             self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
         }
+    }
+
+    /// The header's Expand All: opens every folder that is not gitignored, reading them off the main
+    /// thread, up to [`EXPAND_ALL_MOST`] folders.
+    fn expand_all(&mut self, cx: &mut Context<Self>) {
+        let root = self.tree.root().to_path_buf();
+        let read = cx.background_spawn(async move {
+            let mut queue = VecDeque::from([PathBuf::new()]);
+            let mut found = Vec::new();
+            while let Some(dir) = queue.pop_front() {
+                if found.len() >= EXPAND_ALL_MOST {
+                    break;
+                }
+                let Ok(entries) = fs::list_dir(&root, &dir) else {
+                    continue;
+                };
+                queue.extend(
+                    entries
+                        .iter()
+                        .filter(|e| e.kind == EntryKind::Dir && !e.ignored && !e.loops)
+                        .map(|e| dir.join(&e.name)),
+                );
+                found.push((dir, entries));
+            }
+            found
+        });
+        cx.spawn(async move |this, cx| {
+            let found = read.await;
+            let _ = this.update(cx, |this, cx| {
+                for (dir, entries) in found {
+                    this.tree.set_listing(dir.clone(), entries);
+                    this.tree.expand(&dir);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// IntelliJ's tool window header: the title, then New, Select Opened File, Expand All,
+    /// Collapse All, more options and Hide.
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let p = theme::colors(cx);
+        let options = matches!(self.menu, Some(Menu::Options)).then(|| self.options_popup(cx));
+        div()
+            .h(z(size::TREE_HEAD, cx))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .pl(z(14., cx))
+            .pr(z(6., cx))
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(c(p.ink))
+                    .child("Project"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(z(2., cx))
+                    .child(
+                        // On mouse down, so the tree's own mouse down does not close the popup at once.
+                        header_button("tree-new", IconName::Plus, "New…", cx).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.focus_handle.focus(window, cx);
+                                this.new_file(window, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        header_button(
+                            "tree-locate",
+                            IconName::LocateFixed,
+                            "Select Opened File",
+                            cx,
+                        )
+                        .on_click(
+                            cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Locate)),
+                        ),
+                    )
+                    .child(
+                        header_button("tree-expand", IconName::ChevronsUpDown, "Expand All", cx)
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.expand_all(cx)),
+                            ),
+                    )
+                    .child(
+                        header_button(
+                            "tree-collapse",
+                            IconName::ChevronsDownUp,
+                            "Collapse All",
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.tree.collapse_all();
+                                this.reveal_selection();
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .child(
+                                header_button(
+                                    "tree-options",
+                                    IconName::EllipsisVertical,
+                                    "Options",
+                                    cx,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.focus_handle.focus(window, cx);
+                                        this.watch_focus(window, cx);
+                                        this.menu = match this.menu {
+                                            Some(Menu::Options) => None,
+                                            _ => Some(Menu::Options),
+                                        };
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
+                            .children(options),
+                    )
+                    .child(
+                        header_button("tree-hide", IconName::Minus, "Hide", cx).on_click(
+                            cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PanelEvent::Hide)),
+                        ),
+                    ),
+            )
+    }
+
+    /// The more button's list: the key hint line, and the copy and reveal actions for the selection.
+    fn options_popup(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let hints = self.show_key_hints;
+        floating(
+            HEADER_BUTTON + 2.,
+            Anchor::TopRight,
+            popup_box(cx)
+                .child(
+                    popup_item(
+                        "tree-option-hints",
+                        hints.then_some(IconName::Check),
+                        "Key Hints",
+                        false,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.menu = None;
+                        this.show_key_hints = !this.show_key_hints;
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    popup_item("tree-option-copy", None, "Copy Path", false, cx).on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.menu = None;
+                            window.dispatch_action(Box::new(CopyPath), cx);
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    popup_item("tree-option-reveal", None, "Reveal in Finder", false, cx).on_click(
+                        cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.menu = None;
+                            window.dispatch_action(Box::new(RevealInFinder), cx);
+                            cx.notify();
+                        }),
+                    ),
+                ),
+            cx,
+        )
     }
 
     /// Shift+F6: the selected row's name becomes an input.
@@ -529,7 +761,11 @@ impl ProjectPanel {
         let typed = edit.input.read(cx).value().to_string();
         let root = self.tree.root().to_path_buf();
         match edit.target.clone() {
-            EditTarget::New { dir } => {
+            EditTarget::New { dir, kind } => {
+                let typed = match kind {
+                    EntryKind::Dir if !typed.trim_end().ends_with('/') => format!("{typed}/"),
+                    _ => typed,
+                };
                 let work = cx.background_executor().spawn({
                     let dir = dir.clone();
                     async move { fs::create(&root, &dir, &typed) }
@@ -620,7 +856,7 @@ impl ProjectPanel {
     /// The list lines: the rows, with the new-item input under its folder.
     fn items(&self, rows: Vec<Row>) -> Vec<Item> {
         let mut items: Vec<Item> = rows.into_iter().map(Item::Row).collect();
-        let Some(EditTarget::New { dir }) = self.edit.as_ref().map(|e| &e.target) else {
+        let Some(EditTarget::New { dir, .. }) = self.edit.as_ref().map(|e| &e.target) else {
             return items;
         };
         // Right under the folder's row, one level in.
@@ -653,6 +889,7 @@ impl ProjectPanel {
                 cx.on_focus_out(&self.focus_handle, window, |this, _, _, cx| {
                     this.search = None;
                     this.edit = None;
+                    this.menu = None;
                     cx.notify();
                 }),
             );
@@ -878,6 +1115,152 @@ impl ProjectPanel {
     }
 }
 
+/// The header's icon buttons: square, the icon in `sub`, a hover fill, a tooltip.
+const HEADER_BUTTON: f32 = 22.;
+
+fn header_button(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    cx: &App,
+) -> Stateful<Div> {
+    let p = theme::colors(cx);
+    div()
+        .id(id)
+        .size(z(HEADER_BUTTON, cx))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(z(4., cx))
+        .text_color(c(p.sub))
+        .hover(|style| style.bg(c(p.hover)).text_color(c(p.ink)))
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+        .child(Icon::new(icon).size(z(15., cx)))
+}
+
+/// A list that floats `top` below where it is placed, drawn over everything and kept on screen.
+/// `corner` is the list's corner that sits there.
+fn floating<E: IntoElement>(
+    top: f32,
+    corner: Anchor,
+    list: E,
+    cx: &App,
+) -> impl IntoElement + use<E> {
+    let right = matches!(corner, Anchor::TopRight | Anchor::BottomRight);
+    div()
+        .absolute()
+        .top(z(top, cx))
+        .map(|el| if right { el.right_0() } else { el.left_0() })
+        .child(
+            deferred(
+                anchored()
+                    .anchor(corner)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1),
+        )
+}
+
+fn popup_box(cx: &App) -> Div {
+    let p = theme::colors(cx);
+    div()
+        .occlude()
+        .min_w(z(180., cx))
+        .py(z(4., cx))
+        .flex()
+        .flex_col()
+        .bg(c(p.paper))
+        .border_1()
+        .border_color(c(p.line))
+        .rounded(z(6., cx))
+        .text_size(z(size::UI_TEXT, cx))
+        .text_color(c(p.ink))
+}
+
+/// One line of a floating list; `highlighted` is the one Enter picks.
+fn popup_item(
+    id: impl Into<ElementId>,
+    icon: Option<IconName>,
+    label: &'static str,
+    highlighted: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let p = theme::colors(cx);
+    div()
+        .id(id)
+        .mx(z(4., cx))
+        .px(z(8., cx))
+        .h(z(size::TREE_ROW, cx))
+        .flex()
+        .items_center()
+        .gap(z(8., cx))
+        .rounded(z(4., cx))
+        .when(highlighted, |el| {
+            el.bg(c(p.sel_bg)).text_color(c(p.sel_ink))
+        })
+        .when(!highlighted, |el| el.hover(|style| style.bg(c(p.hover))))
+        .child(
+            div()
+                .size(z(14., cx))
+                .flex_none()
+                .children(icon.map(|icon| Icon::new(icon).size(z(14., cx)).text_color(c(p.sub)))),
+        )
+        .child(label)
+}
+
+/// IntelliJ's New popup under the selected row: a file or a folder. Up, Down and Enter pick, as do
+/// F and D; Escape closes it.
+fn new_popup(
+    depth: usize,
+    choice: usize,
+    panel: WeakEntity<ProjectPanel>,
+    cx: &App,
+) -> impl IntoElement {
+    let p = theme::colors(cx);
+    let kinds = [
+        (EntryKind::File, IconName::File, "File"),
+        (EntryKind::Dir, IconName::Folder, "Directory"),
+    ];
+    div()
+        .absolute()
+        .left(z(row_padding(depth) + CHEVRON_SLOT, cx))
+        .top_0()
+        .child(floating(
+            size::TREE_ROW,
+            Anchor::TopLeft,
+            popup_box(cx)
+                .child(
+                    div()
+                        .px(z(12., cx))
+                        .pb(z(4., cx))
+                        .text_size(z(11.5, cx))
+                        .text_color(c(p.sub))
+                        .child("New"),
+                )
+                .children(
+                    kinds
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, (kind, icon, label))| {
+                            let panel = panel.clone();
+                            popup_item(
+                                ("tree-new-kind", index),
+                                Some(icon),
+                                label,
+                                index == choice,
+                                cx,
+                            )
+                            .on_click(move |_, window, cx| {
+                                let _ =
+                                    panel.update(cx, |this, cx| this.choose_new(kind, window, cx));
+                            })
+                        }),
+                ),
+            cx,
+        ))
+}
+
 /// A row's name, its speed search match in semibold (medium barely shows at 13 px).
 fn name_label(name: &str, query: Option<&str>) -> StyledText {
     let text = StyledText::new(name.to_string());
@@ -993,6 +1376,7 @@ impl Render for ProjectPanel {
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
                     this.search = None;
                     this.edit = None;
+                    this.menu = None;
                     this.focus_handle.focus(window, cx)
                 }),
             )
@@ -1011,7 +1395,16 @@ impl Render for ProjectPanel {
                 let page = this.page_rows(cx);
                 this.apply(NavKey::PageDown(page), cx)
             }))
-            .on_action(cx.listener(|this, _: &Open, _, cx| {
+            .on_action(cx.listener(|this, _: &Open, window, cx| {
+                if let Some(Menu::New { choice, .. }) = &this.menu {
+                    let kind = if *choice == 0 {
+                        EntryKind::File
+                    } else {
+                        EntryKind::Dir
+                    };
+                    this.choose_new(kind, window, cx);
+                    return;
+                }
                 // Enter in a name input reaches here after the input took it.
                 if this.edit.is_none() {
                     this.search = None;
@@ -1020,6 +1413,9 @@ impl Render for ProjectPanel {
             }))
             .on_action(cx.listener(|this, _: &FocusEditor, window, cx| this.escape(window, cx)))
             .on_action(cx.listener(|this, _: &LeafThrough, _, cx| {
+                if this.menu.is_some() {
+                    return;
+                }
                 if this.edit.is_some() {
                     // Space is bound in the tree; let it go on and type into the name.
                     cx.propagate();
@@ -1052,6 +1448,7 @@ impl Render for ProjectPanel {
             .overflow_hidden()
             .bg(c(p.paper))
             .text_size(z(size::UI_TEXT, cx))
+            .child(self.render_header(cx))
             .when_some(self.search.clone(), |el, query| {
                 el.child(search_field(query, cx))
             })
@@ -1068,6 +1465,10 @@ impl Render for ProjectPanel {
                         _ => None,
                     };
                     let panel = cx.weak_entity();
+                    let new_choice = match &self.menu {
+                        Some(Menu::New { choice, .. }) => Some(*choice),
+                        _ => None,
+                    };
                     move |range, _, cx| {
                         items[range]
                             .iter()
@@ -1088,16 +1489,22 @@ impl Render for ProjectPanel {
                                 }
                                 (Item::Row(row), _) => {
                                     let (path, kind) = (row.path.clone(), row.kind);
+                                    let is_selected =
+                                        selected.as_deref() == Some(row.path.as_path());
+                                    let popup = new_choice.filter(|_| is_selected).map(|choice| {
+                                        new_popup(row.depth, choice, panel.clone(), cx)
+                                    });
                                     let panel = panel.clone();
                                     Self::render_row(
                                         row,
-                                        selected.as_deref() == Some(row.path.as_path()),
+                                        is_selected,
                                         focused,
                                         query.as_deref(),
                                         None,
                                         &root_parent,
                                         cx,
                                     )
+                                    .children(popup)
                                     .on_click(move |event, _, cx| {
                                         let count = event.click_count();
                                         let _ = panel.update(cx, |this, cx| {

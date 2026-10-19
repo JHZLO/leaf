@@ -123,6 +123,7 @@ pub fn c(value: u32) -> Hsla {
 pub mod size {
     pub const TITLE_BAR: f32 = 38.;
     pub const TREE_WIDTH: f32 = 300.;
+    pub const TREE_HEAD: f32 = 34.;
     pub const TREE_ROW: f32 = 22.;
     pub const TREE_INDENT: f32 = 14.;
     pub const KEY_HINTS: f32 = 30.;

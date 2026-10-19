@@ -13,7 +13,9 @@ pub fn run(check: &mut Check) {
     let was = check.cx.update(|cx| Theme::global(cx).mode);
     speed_search(check);
     new_file(check);
+    new_directory(check);
     root_row(check);
+    header(check);
     rename(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
@@ -123,7 +125,10 @@ fn speed_search(check: &mut Check) {
 fn new_file(check: &mut Check) {
     let fixture = fixture();
     let window = open_light(check, fixture.path());
-    check.keys(window, "down down cmd-n d r a f t s / i d e a . m d");
+    // Cmd+N asks first: File (Enter, the first line) or Directory.
+    check.keys(window, "down down cmd-n");
+    check.shot(window, "tree-2-new-popup");
+    check.keys(window, "enter d r a f t s / i d e a . m d");
     check.shot(window, "tree-2-new-file");
     check.keys(window, "enter");
     let created = fixture.path().join("docs/drafts/idea.md");
@@ -143,7 +148,7 @@ fn new_file(check: &mut Check) {
 
     // The same name again is refused and the input stays, with the reason after it.
     std::fs::write(&created, "kept\n").expect("write");
-    check.keys(window, "cmd-1 cmd-n i d e a . m d enter");
+    check.keys(window, "cmd-1 cmd-n f i d e a . m d enter");
     check.shot(window, "tree-3-new-file-exists");
     let kept = std::fs::read_to_string(&created).ok();
     check.expect_eq(
@@ -162,6 +167,87 @@ fn new_file(check: &mut Check) {
     );
 }
 
+/// The New popup's Directory makes a folder from the name, without a trailing slash; Escape
+/// closes the popup without making anything.
+fn new_directory(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    check.keys(window, "down cmd-n escape");
+    let before = std::fs::read_dir(fixture.path()).expect("read").count();
+    check.keys(window, "cmd-n down enter n o t e s enter");
+    check.expect_eq(
+        "directory makes a folder named as typed",
+        fixture.path().join("notes").is_dir(),
+        true,
+    );
+    check.expect_eq(
+        "escape made nothing",
+        std::fs::read_dir(fixture.path()).expect("read").count(),
+        before + 1,
+    );
+    // D picks Directory at once; the new folder is selected, so this one goes inside it.
+    check.keys(window, "cmd-n d d r a f t s enter");
+    check.expect_eq(
+        "d picks directory",
+        fixture.path().join("notes/drafts").is_dir(),
+        true,
+    );
+}
+
+/// The header's buttons: Expand All opens every folder but gitignored ones, Collapse All closes
+/// them, the minus hides the tree.
+fn header(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    check.shot(window, "tree-8-header");
+    // The buttons sit right of "Project", 22 wide, ending 6 in from the tree's right edge.
+    let y = 38. + 17.;
+    let button = |from_right: f32| 6. + 300. - 6. - 11. - 24. * from_right;
+    click(check, window, button(3.), y);
+    let expanded = wait_expanded(check, window, |dirs| {
+        dirs.iter().any(|d| d.ends_with("guide"))
+    });
+    check.expect_eq("expand all opens nested folders", expanded, true);
+    let ignored = check.workspace(window, |w, cx| {
+        w.tree_expanded(cx)
+            .is_some_and(|dirs| dirs.iter().any(|d| d.ends_with("target")))
+    });
+    check.expect_eq("expand all leaves gitignored folders shut", ignored, false);
+    click(check, window, button(2.), y);
+    let collapsed = check.workspace(window, |w, cx| w.tree_expanded(cx));
+    check.expect_eq("collapse all closes them", collapsed, Some(Vec::new()));
+    click(check, window, button(0.), y);
+    let hidden = check.workspace(window, |w, cx| w.tree_expanded(cx));
+    check.expect_eq("the minus hides the tree", hidden, None);
+}
+
+fn click(check: &mut Check, window: AnyWindowHandle, x: f32, y: f32) {
+    let at = gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    check
+        .cx
+        .simulate_click(window, at, gpui_kit::Modifiers::default());
+    check.cx.run_until_parked();
+}
+
+/// Expand All reads folders off the main thread; give it a moment.
+fn wait_expanded(
+    check: &mut Check,
+    window: AnyWindowHandle,
+    found: impl Fn(&[PathBuf]) -> bool,
+) -> bool {
+    for _ in 0..100 {
+        check.cx.run_until_parked();
+        let done = check.workspace(window, |w, cx| {
+            w.tree_expanded(cx).is_some_and(|dirs| found(&dirs))
+        });
+        if done {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
 /// The open folder is the first row (IntelliJ): it can be selected, Cmd+N there makes a file at
 /// the top, and Cmd+Shift+C copies the folder's own path.
 fn root_row(check: &mut Check) {
@@ -175,7 +261,7 @@ fn root_row(check: &mut Check) {
         Some(PathBuf::new()),
     );
     check.shot(window, "tree-7-root-row");
-    check.keys(window, "cmd-n t o d o . m d enter");
+    check.keys(window, "cmd-n f t o d o . m d enter");
     check.expect_eq(
         "cmd-n on the open folder creates todo.md at the top",
         fixture.path().join("todo.md").is_file(),
