@@ -1,7 +1,7 @@
 //! leaf's paper palette and sizes. The single source of every color: leaf's own views read
 //! `colors(cx)`, and the gpui-kit theme (editor, scrollbars, menus) is generated from the same values.
 
-use gpui_kit::component::{ActiveTheme as _, Theme, ThemeRegistry};
+use gpui_kit::component::{ActiveTheme as _, Theme, ThemeRegistry, highlighter::LanguageRegistry};
 use gpui_kit::*;
 
 pub struct Palette {
@@ -254,7 +254,8 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
             "syntax": {
                 "title": { "color": hex(p.syn_title), "font_weight": 500 },
                 "punctuation": style(p.syn_mark),
-                "punctuation.list_marker": style(p.syn_mark),
+                // Markdown's structure marks (list and task markers, table pipes, quotes), as IntelliJ.
+                "punctuation.list_marker": style(p.syn_keyword),
                 "punctuation.special": style(p.syn_mark),
                 "punctuation.delimiter": style(p.syn_mark),
                 "punctuation.bracket": style(p.sub),
@@ -307,6 +308,16 @@ pub fn init(cx: &mut App) {
     });
     Theme::sync_system_appearance(None, cx);
     set_zoom(100, cx);
+    highlight_markdown();
+}
+
+/// Swaps in leaf's Markdown highlights, which also mark tables, task boxes and link definitions.
+fn highlight_markdown() {
+    let registry = LanguageRegistry::singleton();
+    if let Some(mut config) = registry.language("markdown") {
+        config.highlights = include_str!("markdown_highlights.scm").into();
+        registry.register("markdown", &config);
+    }
 }
 
 #[cfg(test)]
