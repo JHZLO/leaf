@@ -9,7 +9,7 @@ use crate::check::{Check, fixture};
 pub fn run(check: &mut Check) {
     let fixture = fixture();
 
-    // The tree: walk into docs/guide with the arrow keys; the vein follows the selection.
+    // The tree: walk into docs/guide with the arrow keys; the route follows the selection.
     let window = check.open(Some(fixture.path()));
     check.keys(window, "down down right down right down down");
     let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
@@ -25,7 +25,7 @@ pub fn run(check: &mut Check) {
         copied,
         Some("docs/guide/paths.md".into()),
     );
-    check.shot(window, "1-tree-vein-copied");
+    check.shot(window, "1-tree-route-copied");
 
     // Space opens it as the leaf-through tab and keeps focus in the tree.
     check.keys(window, "space");

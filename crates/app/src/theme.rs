@@ -31,6 +31,9 @@ pub struct Palette {
     /// The terminal's 16 named colors (black, red, green, yellow, blue, magenta, cyan, white,
     /// then their bright forms), toned to the paper like the syntax colors.
     pub ansi: [u32; 16],
+    /// The tree's route: the line leaving each depth's folder, the open folder's first, toned to
+    /// the paper like metro-map lines.
+    pub route: [u32; 6],
 }
 
 pub const LIGHT: Palette = Palette {
@@ -61,6 +64,7 @@ pub const LIGHT: Palette = Palette {
         0x2D2A25, 0xA63D2F, 0x4A7A2C, 0x8A6516, 0x2F6B8A, 0x7A4E9C, 0x2E7672, 0x8F887C, 0x6F695F,
         0xC0493A, 0x5E9440, 0xA97B1C, 0x3B7FA6, 0x9461B8, 0x3A9894, 0xB3AC9F,
     ],
+    route: [0x4A7A2C, 0xA86A0E, 0xB4512D, 0x2E68A3, 0x7A4A9C, 0x227A6C],
 };
 
 pub const DARK: Palette = Palette {
@@ -91,6 +95,7 @@ pub const DARK: Palette = Palette {
         0x3B362F, 0xE07A68, 0x8DBF6A, 0xD7A46B, 0x7FB3CF, 0xC9A0DC, 0x7CC4BE, 0xE3DDD2, 0x7D7568,
         0xF09080, 0x9CCB78, 0xE6BC85, 0x98C5DE, 0xD6B4E6, 0x94D4CE, 0xF5F1EA,
     ],
+    route: [0x8DBF6A, 0xE0A94F, 0xE07F5F, 0x79A8DC, 0xB892D6, 0x5DBFAE],
 };
 
 /// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.

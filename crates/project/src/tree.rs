@@ -21,17 +21,21 @@ pub struct Row {
     pub ignored: bool,
     /// A symlinked folder that leads back up the tree; it never opens.
     pub loops: bool,
-    /// One per ancestor level, outermost first (`guides[level]`).
-    pub guides: Vec<Guide>,
 }
 
-/// The indent guide drawn at one ancestor level of a row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct Guide {
-    /// Part of the vein: the line from an ancestor of the selection down to the selection's path.
-    pub vein: bool,
-    /// The vein turns into this row here (this row is on the selection's path).
-    pub tick: bool,
+/// The rows on the way to `path`, outermost first and ending at `path`'s own row: the folder at
+/// each depth that holds it, so the row at index `d` is at depth `d`. Empty when `path` has no row.
+pub fn route(rows: &[Row], path: &Path) -> Vec<usize> {
+    if !rows.iter().any(|r| r.path == path) {
+        return Vec::new();
+    }
+    let mut ancestors: Vec<&Path> = path.ancestors().collect();
+    ancestors.reverse();
+    // A hidden open folder has no row; every other ancestor of a shown row is shown.
+    ancestors
+        .into_iter()
+        .filter_map(|a| rows.iter().position(|r| r.path == a))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -245,14 +249,12 @@ impl ProjectTree {
         self.expanded.retain(|dir| !dir.starts_with(path));
     }
 
-    /// The visible rows, depth first, with the vein toward the selection. The open folder is the
-    /// first row, at depth 0.
+    /// The visible rows, depth first. The open folder is the first row, at depth 0.
     pub fn rows(&self) -> Vec<Row> {
         let root = Path::new("");
         if self.hide_root {
             let mut rows = Vec::new();
             self.push_rows(root, 0, &mut rows);
-            self.mark_vein(&mut rows);
             return rows;
         }
         let expanded = self.expanded.contains(root);
@@ -268,12 +270,10 @@ impl ProjectTree {
             expanded,
             ignored: false,
             loops: false,
-            guides: Vec::new(),
         }];
         if expanded {
             self.push_rows(root, 1, &mut rows);
         }
-        self.mark_vein(&mut rows);
         rows
     }
 
@@ -294,39 +294,9 @@ impl ProjectTree {
                 expanded,
                 ignored: entry.ignored,
                 loops: entry.loops,
-                guides: vec![Guide::default(); depth],
             });
             if expanded {
                 self.push_rows(&path, depth + 1, rows);
-            }
-        }
-    }
-
-    fn mark_vein(&self, rows: &mut [Row]) {
-        let Some(selected) = &self.selected else {
-            return;
-        };
-        // The selection's ancestors at each depth, from the open folder down, and the row of
-        // each one on the path.
-        let chain: Vec<PathBuf> = selected.ancestors().map(Path::to_path_buf).collect();
-        let chain: Vec<PathBuf> = chain.into_iter().rev().collect();
-        let index_of = |path: &Path, rows: &[Row]| rows.iter().position(|r| r.path == path);
-        for step in 0..chain.len().saturating_sub(1) {
-            let (Some(from), Some(to)) = (
-                index_of(&chain[step], rows),
-                index_of(&chain[step + 1], rows),
-            ) else {
-                continue;
-            };
-            // The guide under an ancestor sits at its depth.
-            let level = rows[from].depth;
-            for row in rows.iter_mut().take(to + 1).skip(from + 1) {
-                if let Some(guide) = row.guides.get_mut(level) {
-                    guide.vein = true;
-                }
-            }
-            if let Some(guide) = rows[to].guides.get_mut(level) {
-                guide.tick = true;
             }
         }
     }
@@ -457,32 +427,6 @@ mod tests {
         ])
     }
 
-    const PLAIN: Guide = Guide {
-        vein: false,
-        tick: false,
-    };
-    const VEIN: Guide = Guide {
-        vein: true,
-        tick: false,
-    };
-    const TICK: Guide = Guide {
-        vein: true,
-        tick: true,
-    };
-
-    fn guides(tree: &ProjectTree) -> Vec<(String, Vec<Guide>)> {
-        tree.rows()
-            .into_iter()
-            .map(|r| (r.path.to_str().unwrap().to_string(), r.guides))
-            .collect()
-    }
-
-    fn expect(rows: &[(&str, &[Guide])]) -> Vec<(String, Vec<Guide>)> {
-        rows.iter()
-            .map(|(p, g)| (p.to_string(), g.to_vec()))
-            .collect()
-    }
-
     #[test]
     fn rows_walk_open_folders_depth_first() {
         let rows = sample().rows();
@@ -524,93 +468,40 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_vein_runs_from_each_ancestor_down_to_the_child_on_the_path() {
-        let mut tree = sample();
-        tree.select(Some("docs/guide/b.md".into()));
-        assert_eq!(
-            guides(&tree),
-            expect(&[
-                ("", &[]),
-                ("docs", &[TICK]),
-                ("docs/guide", &[PLAIN, TICK]),
-                ("docs/guide/a.md", &[PLAIN, PLAIN, VEIN]),
-                ("docs/guide/b.md", &[PLAIN, PLAIN, TICK]),
-                ("docs/readme.md", &[PLAIN, PLAIN]),
-                ("src", &[PLAIN]),
-                ("top.md", &[PLAIN]),
-            ])
-        );
+    /// The route's rows, as paths.
+    fn route_to(tree: &ProjectTree, path: &str) -> Vec<String> {
+        let rows = tree.rows();
+        route(&rows, Path::new(path))
+            .into_iter()
+            .map(|i| rows[i].path.to_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
-    fn the_vein_reaches_a_selected_folder() {
-        let mut tree = sample();
-        tree.select(Some("docs/guide".into()));
+    fn the_route_runs_through_each_folder_on_the_way() {
+        let tree = sample();
         assert_eq!(
-            guides(&tree),
-            expect(&[
-                ("", &[]),
-                ("docs", &[TICK]),
-                ("docs/guide", &[PLAIN, TICK]),
-                ("docs/guide/a.md", &[PLAIN, PLAIN, PLAIN]),
-                ("docs/guide/b.md", &[PLAIN, PLAIN, PLAIN]),
-                ("docs/readme.md", &[PLAIN, PLAIN]),
-                ("src", &[PLAIN]),
-                ("top.md", &[PLAIN]),
-            ])
+            route_to(&tree, "docs/guide/b.md"),
+            ["", "docs", "docs/guide", "docs/guide/b.md"]
         );
+        assert_eq!(route_to(&tree, "docs/guide"), ["", "docs", "docs/guide"]);
+        assert_eq!(route_to(&tree, "top.md"), ["", "top.md"]);
+        assert_eq!(route_to(&tree, ""), [""]);
+        // One row per depth, outermost first.
+        let rows = tree.rows();
+        for (depth, i) in route(&rows, Path::new("docs/readme.md"))
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(rows[i].depth, depth);
+        }
     }
 
     #[test]
-    fn the_vein_passes_over_the_siblings_above_the_path() {
-        let mut tree = sample();
-        tree.select(Some("docs/readme.md".into()));
-        assert_eq!(
-            guides(&tree),
-            expect(&[
-                ("", &[]),
-                ("docs", &[TICK]),
-                ("docs/guide", &[PLAIN, VEIN]),
-                ("docs/guide/a.md", &[PLAIN, VEIN, PLAIN]),
-                ("docs/guide/b.md", &[PLAIN, VEIN, PLAIN]),
-                ("docs/readme.md", &[PLAIN, TICK]),
-                ("src", &[PLAIN]),
-                ("top.md", &[PLAIN]),
-            ])
-        );
-    }
-
-    #[test]
-    fn no_vein_without_a_selection_or_on_the_open_folder() {
-        let mut tree = sample();
-        let all_plain = |tree: &ProjectTree| {
-            tree.rows()
-                .iter()
-                .all(|r| r.guides.iter().all(|g| *g == PLAIN))
-        };
-        assert!(all_plain(&tree));
-        tree.select(Some("".into()));
-        assert!(all_plain(&tree));
-    }
-
-    #[test]
-    fn a_top_level_selection_has_its_vein_from_the_open_folder() {
-        let mut tree = sample();
-        tree.select(Some("top.md".into()));
-        assert_eq!(
-            guides(&tree),
-            expect(&[
-                ("", &[]),
-                ("docs", &[VEIN]),
-                ("docs/guide", &[VEIN, PLAIN]),
-                ("docs/guide/a.md", &[VEIN, PLAIN, PLAIN]),
-                ("docs/guide/b.md", &[VEIN, PLAIN, PLAIN]),
-                ("docs/readme.md", &[VEIN, PLAIN]),
-                ("src", &[VEIN]),
-                ("top.md", &[TICK]),
-            ])
-        );
+    fn no_route_to_a_path_without_a_row() {
+        let tree = sample();
+        assert!(route_to(&tree, "src/main.rs").is_empty());
+        assert!(route_to(&tree, "gone.md").is_empty());
     }
 
     #[test]
@@ -628,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_root_puts_its_folders_at_the_top_with_their_veins() {
+    fn a_hidden_root_puts_its_folders_at_the_top_with_their_routes() {
         let mut tree = tree_with(&[("", vec![dir("a"), dir("b")]), ("a", vec![file("x.md")])]);
         tree.hide_root();
         tree.select(Some("a/x.md".into()));
@@ -638,8 +529,8 @@ mod tests {
             .map(|r| (r.path.to_str().unwrap(), r.depth))
             .collect();
         assert_eq!(summary, [("a", 0), ("a/x.md", 1), ("b", 0)]);
-        assert_eq!(rows[1].guides, [TICK]);
-        assert_eq!(rows[2].guides, []);
+        // The route starts at the folder's own row.
+        assert_eq!(route(&rows, Path::new("a/x.md")), [0, 1]);
     }
 
     #[test]

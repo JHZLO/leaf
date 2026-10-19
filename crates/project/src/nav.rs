@@ -128,7 +128,6 @@ pub fn speed_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::Guide;
 
     fn row(path: &str, kind: EntryKind, expanded: bool) -> Row {
         let path = PathBuf::from(path);
@@ -141,7 +140,6 @@ mod tests {
             expanded,
             ignored: false,
             loops: false,
-            guides: vec![Guide::default(); depth],
         }
     }
 

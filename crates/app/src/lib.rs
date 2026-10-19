@@ -12,6 +12,7 @@ pub mod keymap;
 mod menus;
 mod preview;
 mod project_panel;
+mod route;
 mod search_panel;
 mod status_bar;
 mod terminal_panel;

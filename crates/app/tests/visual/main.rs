@@ -44,6 +44,8 @@ fn main() {
         std::sync::Arc::new(leaf::icons::LeafAssets),
     );
     cx.update(leaf::init);
+    // An offscreen window draws only on input, so the tree's route is shot where it settles.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let mut check = check::Check {
         cx,
         out,

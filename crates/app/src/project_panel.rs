@@ -1,9 +1,10 @@
-//! The folder tree on the left: the vein toward the selection, key hints, and IntelliJ moves.
+//! The folder tree on the left: the route to the selection, key hints, and IntelliJ moves.
 
 use std::{
     collections::VecDeque,
     ops::Range,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use gpui_kit::{
@@ -20,7 +21,7 @@ use leaf_project::{
     folders::Folders,
     fs::{self, EntryKind, NameError},
     nav::{self, NavKey, SearchStep},
-    tree::{Guide, ProjectTree, Row},
+    tree::{self, ProjectTree, Row},
 };
 
 use crate::{
@@ -30,6 +31,7 @@ use crate::{
         PageDown, PageUp, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
         Trash,
     },
+    route,
     theme::{self, c, size, z},
 };
 
@@ -67,8 +69,9 @@ fn row_padding(depth: usize) -> f32 {
     ROW_PADDING_LEFT + depth as f32 * size::TREE_INDENT
 }
 
-/// The x of the indent guide at `level`: under the chevron center of that level's folder.
-fn guide_x(level: usize) -> f32 {
+/// The x of the column at `level`, where the route runs: under the chevron center of that
+/// level's folders.
+fn column_x(level: usize) -> f32 {
     row_padding(level) + CHEVRON_SLOT / 2.
 }
 
@@ -143,6 +146,10 @@ pub struct ProjectPanel {
     /// A name being typed into the tree (Cmd+N, Shift+F6).
     edit: Option<Edit>,
     menu: Option<Menu>,
+    /// The route to the selection, gliding when the selection moves.
+    route: route::Motion,
+    /// The row under the pointer: it gets a background and a dashed way to it off the route.
+    hovered: Option<PathBuf>,
 }
 
 /// A name being typed into the tree, in an input on its own line.
@@ -185,7 +192,7 @@ fn name_selection(name: &str, kind: EntryKind) -> Range<usize> {
 /// One line of the list: a tree row, or the input for a new item right under its folder.
 enum Item {
     Row(Row),
-    New { depth: usize, guides: Vec<Guide> },
+    New { depth: usize },
 }
 
 /// The input line and its refusal, as the list draws them.
@@ -225,6 +232,8 @@ impl ProjectPanel {
             reveal_pending: false,
             edit: None,
             menu: None,
+            route: route::Motion::default(),
+            hovered: None,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -923,18 +932,7 @@ impl ProjectPanel {
                 _ => None,
             })
             .unwrap_or((0, 0));
-        // The vein runs through the new line wherever it runs through the line below it.
-        let below = match items.get(at) {
-            Some(Item::Row(row)) => row.guides.as_slice(),
-            _ => &[],
-        };
-        let guides = (0..depth)
-            .map(|level| Guide {
-                vein: below.get(level).is_some_and(|g| g.vein),
-                tick: false,
-            })
-            .collect();
-        items.insert(at, Item::New { depth, guides });
+        items.insert(at, Item::New { depth });
         items
     }
 
@@ -1016,17 +1014,20 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// A tree line at `depth`: height, indent and its guides with the vein. `is_dir` sets how far
-    /// the vein's tick reaches into the line.
-    fn row_frame(
-        id: impl Into<ElementId>,
-        depth: usize,
-        guides: &[Guide],
-        is_dir: bool,
-        cx: &App,
-    ) -> Stateful<Div> {
-        let p = theme::colors(cx);
-        let mut el = div()
+    /// The pointer entered or left the row at `path`.
+    fn hover_row(&mut self, path: &Path, hovered: bool, cx: &mut Context<Self>) {
+        if hovered && self.hovered.as_deref() != Some(path) {
+            self.hovered = Some(path.to_path_buf());
+            cx.notify();
+        } else if !hovered && self.hovered.as_deref() == Some(path) {
+            self.hovered = None;
+            cx.notify();
+        }
+    }
+
+    /// A tree line at `depth`: its height and indent.
+    fn row_frame(id: impl Into<ElementId>, depth: usize, cx: &App) -> Stateful<Div> {
+        div()
             .id(id)
             .relative()
             .w_full()
@@ -1036,49 +1037,20 @@ impl ProjectPanel {
             .h(z(size::TREE_ROW, cx))
             .pl(z(row_padding(depth), cx))
             .pr(z(ROW_PADDING_RIGHT, cx))
-            .whitespace_nowrap();
-        for (level, guide) in guides.iter().enumerate() {
-            let x = guide_x(level);
-            // The 2 px vein covers the 1 px guide and one pixel to its left.
-            let (left, width, color) = if guide.vein {
-                (x - 1., 2., p.accent)
-            } else {
-                (x, 1., p.guide)
-            };
-            el = el.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(z(left, cx))
-                    .w(z(width, cx))
-                    .bg(c(color)),
-            );
-            if guide.tick {
-                // A folder's tick stops before its chevron; a file's runs through the empty slot.
-                let tick = if is_dir { 7. } else { 19. };
-                el = el.child(
-                    div()
-                        .absolute()
-                        .top(z((size::TREE_ROW - 2.) / 2., cx))
-                        .h(z(2., cx))
-                        .left(z(left, cx))
-                        .w(z(tick, cx))
-                        .bg(c(color)),
-                );
-            }
-        }
-        el
+            .whitespace_nowrap()
     }
 
-    /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
+    /// `selection` is `Some(focused)` on the selected row, whose ink dims when the tree has no
+    /// focus. `route` is the color of the route's line at a row on it: the row's chevron gives way
+    /// to the route's ring, its icon takes the line's color and its name is set in medium. The
+    /// backgrounds and the route itself are painted under the rows (see `route`).
     /// The part of the name a speed search for `query` matched is set in semibold.
     /// With `rename`, the name is an input. A folder of the window (and the window's own node) is
     /// set in medium and shows `hint`, where it is on disk.
     fn render_row(
         row: &Row,
-        selected: bool,
-        focused: bool,
+        selection: Option<bool>,
+        route: Option<u32>,
         query: Option<&str>,
         rename: Option<&EditView>,
         hint: Option<&SharedString>,
@@ -1087,24 +1059,21 @@ impl ProjectPanel {
         let p = theme::colors(cx);
         let is_dir = row.kind == EntryKind::Dir;
         let folder_row = row.path.as_os_str().is_empty() || hint.is_some();
-        let (ink, chevron_color) = match (selected, focused) {
-            (true, true) => (p.sel_ink, p.sel_ink),
-            (true, false) => (p.ink, p.sub),
-            (false, _) if row.ignored => (p.ignored, p.sub),
-            (false, _) => (p.ink, p.sub),
+        let (ink, chevron_color) = match selection {
+            Some(true) => (p.sel_ink, p.sel_ink),
+            Some(false) => (p.ink, p.sub),
+            None if row.ignored => (p.ignored, p.sub),
+            None => (p.ink, p.sub),
         };
         Self::row_frame(
             ElementId::Name(row.path.to_string_lossy().to_string().into()),
             row.depth,
-            &row.guides,
-            is_dir,
             cx,
         )
         .text_color(c(ink))
-        .when(selected, |el| {
-            el.bg(c(if focused { p.sel_bg } else { p.guide }))
+        .when(route.is_some() && !folder_row, |el| {
+            el.font_weight(FontWeight::MEDIUM)
         })
-        .when(!selected, |el| el.hover(|style| style.bg(c(p.hover))))
         .child(
             div()
                 .size(z(CHEVRON_SLOT, cx))
@@ -1112,7 +1081,7 @@ impl ProjectPanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                .when(is_dir, |slot| {
+                .when(is_dir && route.is_none(), |slot| {
                     slot.child(
                         Icon::default()
                             .data(CHEVRON)
@@ -1130,10 +1099,10 @@ impl ProjectPanel {
             } else {
                 icons::file_icon(&row.name)
             };
-            let color = if row.ignored {
-                p.ignored
-            } else {
-                tint.color(p)
+            let color = match route {
+                Some(line) => line,
+                None if row.ignored => p.ignored,
+                None => tint.color(p),
             };
             Icon::new(icon)
                 .size(z(ICON_SIZE, cx))
@@ -1164,8 +1133,8 @@ impl ProjectPanel {
     }
 
     /// The line where a new item's name is typed, under its folder.
-    fn render_new(depth: usize, guides: &[Guide], edit: &EditView, cx: &App) -> Stateful<Div> {
-        Self::row_frame("tree-new", depth, guides, false, cx)
+    fn render_new(depth: usize, edit: &EditView, cx: &App) -> Stateful<Div> {
+        Self::row_frame("tree-new", depth, cx)
             .child(div().size(z(CHEVRON_SLOT, cx)).flex_none())
             .child(edit_field(edit, cx))
     }
@@ -1475,8 +1444,69 @@ impl Render for ProjectPanel {
             .as_ref()
             .and_then(|s| rows.iter().find(|r| &r.path == s))
             .cloned();
+        // The way to the selection and to the hovered row, as list lines: the input for a new
+        // item is a line of its own, and the lines below it move down one.
+        let stops = selected
+            .as_deref()
+            .map_or_else(Vec::new, |s| tree::route(&rows, s));
+        let hovered = self
+            .hovered
+            .as_deref()
+            .map_or_else(Vec::new, |h| tree::route(&rows, h));
         let items = self.items(rows);
         let count = items.len();
+        let new_at = items
+            .iter()
+            .position(|item| matches!(item, Item::New { .. }));
+        let to_line = |row: usize| row + usize::from(new_at.is_some_and(|at| row >= at));
+        let stops: Vec<usize> = stops.into_iter().map(to_line).collect();
+        let hovered: Vec<usize> = hovered.into_iter().map(to_line).collect();
+        let now = Instant::now();
+        self.route
+            .aim(selected.as_deref(), &stops, now, !cx.reduce_motion());
+        if self.route.moving(now) {
+            window.request_animation_frame();
+        }
+        // A folder on the route takes the color of the line leaving it; the selection, of the
+        // line reaching it.
+        let on_route: Vec<(usize, u32)> = stops
+            .iter()
+            .enumerate()
+            .map(|(depth, &line)| {
+                let leg = if depth + 1 == stops.len() {
+                    depth.saturating_sub(1)
+                } else {
+                    depth
+                };
+                (line, p.route[leg % p.route.len()])
+            })
+            .collect();
+        let route_layer = {
+            let (shape, ping) = (self.route.at(now), self.route.ping(now));
+            let scroll = self.scroll.clone();
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    let offset = scroll.0.borrow().base_handle.offset();
+                    let look = route::Look {
+                        origin: point(bounds.left(), bounds.top() + offset.y),
+                        row: z(size::TREE_ROW, cx),
+                        column: z(column_x(0), cx),
+                        indent: z(size::TREE_INDENT, cx),
+                        right: bounds.right() - z(ROW_PADDING_RIGHT, cx),
+                        zoom: theme::zoom(cx),
+                        lines: p.route.map(c),
+                        ring: c(p.ink),
+                        paper: c(p.paper),
+                        selection: c(if focused { p.sel_bg } else { p.guide }),
+                        hover: c(p.hover),
+                    };
+                    route::paint(window, bounds, &look, &shape, ping, &stops, &hovered);
+                },
+            )
+            .absolute()
+            .size_full()
+        };
         let hints = match &self.edit {
             Some(edit) => edit.target.hints(),
             None => hint_keys(selected_row.as_ref()),
@@ -1566,113 +1596,151 @@ impl Render for ProjectPanel {
                 el.child(search_field(query, cx))
             })
             .child(
-                uniform_list("project-tree", count, {
-                    let selected = selected.clone();
-                    let query = self.search.clone();
-                    let edit = self.edit.as_ref().map(|edit| EditView {
-                        input: edit.input.clone(),
-                        error: edit.error.clone(),
-                    });
-                    let renaming = match self.edit.as_ref().map(|edit| &edit.target) {
-                        Some(EditTarget::Rename { path }) => Some(path.clone()),
-                        _ => None,
-                    };
-                    let panel = cx.weak_entity();
-                    let new_choice = match &self.menu {
-                        Some(Menu::New { choice, .. }) => Some(*choice),
-                        _ => None,
-                    };
-                    let folder_menu = match &self.menu {
-                        Some(Menu::Folder { path }) => Some(path.clone()),
-                        _ => None,
-                    };
-                    // With several folders, a folder's row has a menu (right-click).
-                    let folder_rows: Vec<PathBuf> = if self.folders.several() {
-                        self.folders.keys().iter().map(PathBuf::from).collect()
-                    } else {
-                        Vec::new()
-                    };
-                    move |range, _, cx| {
-                        items[range]
-                            .iter()
-                            .map(|item| match (item, &edit) {
-                                (Item::Row(row), Some(edit))
-                                    if renaming.as_deref() == Some(row.path.as_path()) =>
-                                {
-                                    Self::render_row(
-                                        row,
-                                        true,
-                                        focused,
-                                        None,
-                                        Some(edit),
-                                        places
-                                            .iter()
-                                            .find(|(path, _)| *path == row.path)
-                                            .map(|(_, place)| place),
-                                        cx,
-                                    )
-                                    .into_any_element()
-                                }
-                                (Item::Row(row), _) => {
-                                    let (path, kind) = (row.path.clone(), row.kind);
-                                    let is_selected =
-                                        selected.as_deref() == Some(row.path.as_path());
-                                    let popup = new_choice.filter(|_| is_selected).map(|choice| {
-                                        new_popup(row.depth, choice, panel.clone(), cx)
-                                            .into_any_element()
-                                    });
-                                    let folder_popup = folder_menu
-                                        .as_ref()
-                                        .filter(|path| **path == row.path)
-                                        .map(|path| {
-                                            folder_popup(row.depth, path.clone(), panel.clone(), cx)
-                                                .into_any_element()
-                                        });
-                                    let is_folder = folder_rows.contains(&row.path);
-                                    let panel = panel.clone();
-                                    Self::render_row(
-                                        row,
-                                        is_selected,
-                                        focused,
-                                        query.as_deref(),
-                                        None,
-                                        places
-                                            .iter()
-                                            .find(|(path, _)| *path == row.path)
-                                            .map(|(_, place)| place),
-                                        cx,
-                                    )
-                                    .children(popup)
-                                    .children(folder_popup)
-                                    .when(is_folder, |el| {
-                                        let (panel, path) = (panel.clone(), row.path.clone());
-                                        el.on_mouse_down(
-                                            MouseButton::Right,
-                                            move |_, window, cx| {
-                                                let _ = panel.update(cx, |this, cx| {
-                                                    this.open_folder_menu(path.clone(), window, cx)
-                                                });
-                                            },
+                // The route and the row backgrounds are painted under the list's rows.
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(route_layer)
+                    .child(
+                        uniform_list("project-tree", count, {
+                            let selected = selected.clone();
+                            let query = self.search.clone();
+                            let edit = self.edit.as_ref().map(|edit| EditView {
+                                input: edit.input.clone(),
+                                error: edit.error.clone(),
+                            });
+                            let renaming = match self.edit.as_ref().map(|edit| &edit.target) {
+                                Some(EditTarget::Rename { path }) => Some(path.clone()),
+                                _ => None,
+                            };
+                            let panel = cx.weak_entity();
+                            let new_choice = match &self.menu {
+                                Some(Menu::New { choice, .. }) => Some(*choice),
+                                _ => None,
+                            };
+                            let folder_menu = match &self.menu {
+                                Some(Menu::Folder { path }) => Some(path.clone()),
+                                _ => None,
+                            };
+                            // With several folders, a folder's row has a menu (right-click).
+                            let folder_rows: Vec<PathBuf> = if self.folders.several() {
+                                self.folders.keys().iter().map(PathBuf::from).collect()
+                            } else {
+                                Vec::new()
+                            };
+                            move |range, _, cx| {
+                                items[range.clone()]
+                                    .iter()
+                                    .zip(range)
+                                    .map(|(item, line)| {
+                                        (
+                                            item,
+                                            on_route
+                                                .iter()
+                                                .find(|(l, _)| *l == line)
+                                                .map(|&(_, color)| color),
                                         )
                                     })
-                                    .on_click(move |event, _, cx| {
-                                        let count = event.click_count();
-                                        let _ = panel.update(cx, |this, cx| {
-                                            this.click_row(path.clone(), kind, count, cx)
-                                        });
+                                    .map(|(item, route)| match (item, &edit) {
+                                        (Item::Row(row), Some(edit))
+                                            if renaming.as_deref() == Some(row.path.as_path()) =>
+                                        {
+                                            Self::render_row(
+                                                row,
+                                                Some(focused),
+                                                route,
+                                                None,
+                                                Some(edit),
+                                                places
+                                                    .iter()
+                                                    .find(|(path, _)| *path == row.path)
+                                                    .map(|(_, place)| place),
+                                                cx,
+                                            )
+                                            .into_any_element()
+                                        }
+                                        (Item::Row(row), _) => {
+                                            let (path, kind) = (row.path.clone(), row.kind);
+                                            let is_selected =
+                                                selected.as_deref() == Some(row.path.as_path());
+                                            let popup =
+                                                new_choice.filter(|_| is_selected).map(|choice| {
+                                                    new_popup(row.depth, choice, panel.clone(), cx)
+                                                        .into_any_element()
+                                                });
+                                            let folder_popup = folder_menu
+                                                .as_ref()
+                                                .filter(|path| **path == row.path)
+                                                .map(|path| {
+                                                    folder_popup(
+                                                        row.depth,
+                                                        path.clone(),
+                                                        panel.clone(),
+                                                        cx,
+                                                    )
+                                                    .into_any_element()
+                                                });
+                                            let is_folder = folder_rows.contains(&row.path);
+                                            let panel = panel.clone();
+                                            Self::render_row(
+                                                row,
+                                                is_selected.then_some(focused),
+                                                route,
+                                                query.as_deref(),
+                                                None,
+                                                places
+                                                    .iter()
+                                                    .find(|(path, _)| *path == row.path)
+                                                    .map(|(_, place)| place),
+                                                cx,
+                                            )
+                                            .children(popup)
+                                            .children(folder_popup)
+                                            .when(is_folder, |el| {
+                                                let (panel, path) =
+                                                    (panel.clone(), row.path.clone());
+                                                el.on_mouse_down(
+                                                    MouseButton::Right,
+                                                    move |_, window, cx| {
+                                                        let _ = panel.update(cx, |this, cx| {
+                                                            this.open_folder_menu(
+                                                                path.clone(),
+                                                                window,
+                                                                cx,
+                                                            )
+                                                        });
+                                                    },
+                                                )
+                                            })
+                                            .on_hover({
+                                                let (panel, path) =
+                                                    (panel.clone(), row.path.clone());
+                                                move |&hovered, _, cx| {
+                                                    let _ = panel.update(cx, |this, cx| {
+                                                        this.hover_row(&path, hovered, cx)
+                                                    });
+                                                }
+                                            })
+                                            .on_click(move |event, _, cx| {
+                                                let count = event.click_count();
+                                                let _ = panel.update(cx, |this, cx| {
+                                                    this.click_row(path.clone(), kind, count, cx)
+                                                });
+                                            })
+                                            .into_any_element()
+                                        }
+                                        (Item::New { depth }, Some(edit)) => {
+                                            Self::render_new(*depth, edit, cx).into_any_element()
+                                        }
+                                        (Item::New { .. }, None) => div().into_any_element(),
                                     })
-                                    .into_any_element()
-                                }
-                                (Item::New { depth, guides }, Some(edit)) => {
-                                    Self::render_new(*depth, guides, edit, cx).into_any_element()
-                                }
-                                (Item::New { .. }, None) => div().into_any_element(),
-                            })
-                            .collect()
-                    }
-                })
-                .track_scroll(&self.scroll)
-                .flex_1(),
+                                    .collect()
+                            }
+                        })
+                        .track_scroll(&self.scroll)
+                        .size_full(),
+                    ),
             )
             .when(self.show_key_hints, |el| el.child(key_hints(hints, cx)))
             .child(crate::workspace::island_corners(cx))
@@ -1751,7 +1819,7 @@ mod tests {
     use leaf_project::{fs::EntryKind, tree::Row};
 
     use super::{
-        CHEVRON_SLOT, clamp_width, guide_x, hint_keys, name_selection, row_padding, rows_per_page,
+        CHEVRON_SLOT, clamp_width, column_x, hint_keys, name_selection, row_padding, rows_per_page,
         tilde,
     };
 
@@ -1764,7 +1832,6 @@ mod tests {
             expanded,
             ignored: false,
             loops,
-            guides: Vec::new(),
         }
     }
 
@@ -1809,17 +1876,17 @@ mod tests {
     }
 
     #[test]
-    fn guides_follow_the_design_formula() {
-        // The design puts the guide of depth L at x = 16 + 14L.
+    fn columns_follow_the_design_formula() {
+        // The design puts the column of depth L at x = 16 + 14L.
         for level in 0..5 {
-            assert_eq!(guide_x(level), 16. + 14. * level as f32);
+            assert_eq!(column_x(level), 16. + 14. * level as f32);
         }
     }
 
     #[test]
-    fn a_folder_chevron_sits_on_the_guide_of_its_children() {
+    fn a_folder_chevron_sits_on_its_column() {
         for depth in 0..5 {
-            assert_eq!(row_padding(depth) + CHEVRON_SLOT / 2., guide_x(depth));
+            assert_eq!(row_padding(depth) + CHEVRON_SLOT / 2., column_x(depth));
         }
     }
 
