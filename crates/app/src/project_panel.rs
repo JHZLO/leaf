@@ -1498,7 +1498,8 @@ impl Render for ProjectPanel {
                         lines: p.route.map(c),
                         ring: c(p.ink),
                         paper: c(p.paper),
-                        selection: c(if focused { p.sel_bg } else { p.guide }),
+                        // Without focus the band turns neutral and fainter, like the current line.
+                        selection: c(if focused { p.tree_sel } else { p.cur }),
                         hover: c(p.hover),
                     };
                     route::paint(window, bounds, &look, &shape, ping, &stops, &hovered);
