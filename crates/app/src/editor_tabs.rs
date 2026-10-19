@@ -11,6 +11,7 @@ use gpui_kit::component::{
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
     input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _, TabSize},
+    tooltip::Tooltip,
 };
 use gpui_kit::{assets::IconName, prelude::FluentBuilder as _, *};
 use leaf_project::{
@@ -81,6 +82,10 @@ pub struct EditorTabs {
     /// The active tab's cursor lines as last reported, so caret blinks do not count as changes.
     last_lines: Option<(u32, u32)>,
     preview: Option<Entity<Preview>>,
+    /// IntelliJ's Preview only: the preview takes the whole pane for a Markdown tab.
+    preview_only: bool,
+    /// The editor's share of the width beside the preview, dragged from the line between them.
+    split: f32,
     focus_handle: FocusHandle,
     /// The last file that could not be opened, and why; shown in the status bar.
     pub error: Option<String>,
@@ -89,13 +94,25 @@ pub struct EditorTabs {
 impl EventEmitter<TabsChanged> for EditorTabs {}
 
 impl Focusable for EditorTabs {
+    /// The active tab's editor, unless only its preview shows: keys must not edit hidden text.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match self.active_tab() {
-            Some(tab) => tab.editor.focus_handle(cx),
-            None => self.focus_handle.clone(),
+            Some(tab) if !self.editor_hidden() => tab.editor.focus_handle(cx),
+            _ => self.focus_handle.clone(),
         }
     }
 }
+
+/// How a Markdown tab shows (IntelliJ's three buttons at the editor's top right).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Editor,
+    Split,
+    Preview,
+}
+
+/// What the line between the editor and the preview drags.
+struct SplitDrag;
 
 fn file_name(path: &Path) -> SharedString {
     path.file_name()
@@ -143,6 +160,8 @@ impl EditorTabs {
             restoring_active: None,
             last_lines: None,
             preview: None,
+            preview_only: false,
+            split: 0.5,
             focus_handle: cx.focus_handle(),
             error: None,
         }
@@ -892,12 +911,52 @@ impl EditorTabs {
         self.preview.is_some()
     }
 
+    /// Cmd+Shift+V: the preview beside the editor, or no preview.
     pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_only = false;
         if self.preview.take().is_none() {
             self.preview = Some(cx.new(Preview::new));
             self.refresh_preview(cx);
         }
         cx.notify();
+    }
+
+    pub fn view(&self) -> View {
+        match (&self.preview, self.preview_only) {
+            (None, _) => View::Editor,
+            (Some(_), false) => View::Split,
+            (Some(_), true) => View::Preview,
+        }
+    }
+
+    /// The view buttons: editor only, editor and preview, preview only.
+    pub fn set_view(&mut self, view: View, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self.focus_handle.contains_focused(window, cx);
+        if view == View::Editor {
+            self.preview = None;
+        } else if self.preview.is_none() {
+            self.preview = Some(cx.new(Preview::new));
+            self.refresh_preview(cx);
+        }
+        self.preview_only = view == View::Preview;
+        // The keyboard follows: to the editor when it shows again, off it when it hides.
+        if had_focus {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether the editor and the preview show, and the editor's share beside the preview; for the
+    /// UI checks.
+    pub fn panes(&self) -> (bool, bool, f32) {
+        (!self.editor_hidden(), self.preview.is_some(), self.split)
+    }
+
+    /// Only the preview shows: Preview only, on a Markdown tab (other files always show the editor).
+    fn editor_hidden(&self) -> bool {
+        self.preview_only
+            && self.preview.is_some()
+            && self.active_tab().is_some_and(|t| t.is_markdown())
     }
 
     /// The editor the preview shows: the active tab, when it is Markdown.
@@ -1097,17 +1156,74 @@ impl EditorTabs {
                     }))
             })
             .collect();
+        let markdown = self.active_tab().is_some_and(|t| t.is_markdown());
+        let current = self.view();
         div()
             .h(z(size::TAB_BAR, cx))
             .flex_none()
             .flex()
-            .overflow_x_hidden()
             .bg(c(p.paper))
             .border_b_1()
             .border_color(c(p.line))
             .text_size(z(12.5, cx))
-            .children(tabs)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .overflow_x_hidden()
+                    .children(tabs),
+            )
+            .when(markdown, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(z(2., cx))
+                        .px(z(8., cx))
+                        .children(
+                            [
+                                (View::Editor, IconName::Code, "Editor Only"),
+                                (View::Split, IconName::SquareCode, "Editor and Preview"),
+                                (View::Preview, IconName::Eye, "Preview Only"),
+                            ]
+                            .map(|(view, icon, label)| {
+                                view_button(view, icon, label, view == current, cx).on_click(
+                                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                        this.set_view(view, window, cx)
+                                    }),
+                                )
+                            }),
+                        ),
+                )
+            })
     }
+}
+
+/// One of the Markdown view buttons; the one in use is filled.
+fn view_button(
+    view: View,
+    icon: IconName,
+    label: &'static str,
+    selected: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let p = theme::colors(cx);
+    div()
+        .id(("markdown-view", view as usize))
+        .size(z(24., cx))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(z(4., cx))
+        .text_color(c(if selected { p.accent } else { p.sub }))
+        .when(selected, |el| el.bg(c(p.sel_bg)))
+        .when(!selected, |el| {
+            el.hover(|style| style.bg(c(p.hover)).text_color(c(p.ink)))
+        })
+        .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
+        .child(Icon::new(icon).size(z(15., cx)))
 }
 
 /// The line holding `offset`: its row, where it starts, and its text.
@@ -1240,16 +1356,45 @@ impl Render for EditorTabs {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .children(banner)
-                            .child(body),
+                    .on_drag_move(
+                        cx.listener(|this, event: &DragMoveEvent<SplitDrag>, _, cx| {
+                            let width = event.bounds.size.width;
+                            if width > px(0.) {
+                                this.split = ((event.event.position.x - event.bounds.left())
+                                    / width)
+                                    .clamp(0.2, 0.8);
+                                cx.notify();
+                            }
+                        }),
                     )
+                    .when(!self.editor_hidden(), |el| {
+                        el.child(
+                            div()
+                                .map(|el| match &self.preview {
+                                    // Beside the preview the editor keeps its dragged share.
+                                    Some(_) => el.flex_none().w(relative(self.split)),
+                                    None => el.flex_1(),
+                                })
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_col()
+                                .children(banner)
+                                .child(body),
+                        )
+                        .when(self.preview.is_some(), |el| {
+                            // The grip just left of the preview's divider line.
+                            el.child(
+                                div()
+                                    .id("preview-split")
+                                    .flex_none()
+                                    .w(z(5., cx))
+                                    .h_full()
+                                    .cursor_col_resize()
+                                    .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
+                            )
+                        })
+                    })
                     .children(self.preview.clone()),
             )
     }

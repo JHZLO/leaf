@@ -630,6 +630,11 @@ impl Workspace {
     }
 
     /// The active tab's text as the editor holds it (tests read it to check editing keys).
+    /// Whether the editor and the preview show, and the editor's share of the width; for the UI checks.
+    pub fn editor_panes(&self, cx: &App) -> (bool, bool, f32) {
+        self.tabs.read(cx).panes()
+    }
+
     pub fn active_text(&self, cx: &App) -> Option<String> {
         let tabs = self.tabs.read(cx);
         Some(tabs.active_tab()?.editor.read(cx).value().to_string())

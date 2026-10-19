@@ -73,7 +73,7 @@ The keys follow IntelliJ IDEA.
 | | `Cmd+Alt+R` | Reveal in Finder |
 | | `Cmd+S`, `Cmd+W` | Save, close the tab |
 | | `Cmd+Shift+[` / `]` | Previous / next tab |
-| | `Cmd+Shift+V` | Markdown preview |
+| | `Cmd+Shift+V` | Markdown preview beside the editor (the buttons at the tab bar's right also show the preview alone; drag the line between them) |
 | | `Cmd+=`, `Cmd+-`, `Cmd+0` | Zoom in, out, back to 100% |
 | | `Alt+F12` | Focus the terminal, which opens with the folder (in the terminal: hide it, the shell keeps running) |
 | | `Cmd+T` | New terminal tab |

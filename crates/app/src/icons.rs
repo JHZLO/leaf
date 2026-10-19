@@ -24,6 +24,8 @@ gpui_kit::assets::icon_assets!(
         LocateFixed,
         ChevronsDownUp,
         X,
+        Code,
+        SquareCode,
     ]
 );
 
