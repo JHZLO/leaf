@@ -1,5 +1,5 @@
-//! The terminal: Alt+F12 opens a shell in the open folder, typed text and keys reach it, Alt+F12
-//! hides it (the shell lives on), and `exit` closes it. The shell is /bin/sh (`LEAF_SHELL`), so
+//! The terminal: open with the folder, Alt+F12 gives it focus, typed text and keys reach the shell,
+//! Alt+F12 in it hides it (the shell lives on), and `exit` closes it. The shell is /bin/sh (`LEAF_SHELL`), so
 //! nobody's login files change what the checks see.
 
 use std::{
@@ -15,9 +15,17 @@ pub fn run(check: &mut Check) {
     let fixture = fixture();
     let root = fixture.path().canonicalize().expect("root");
     let window = check.open(Some(&root));
-    check.keys(window, "alt-f12");
     let opened = check.workspace(window, |w, cx| w.terminal_lines(cx).is_some());
-    check.expect_eq("alt-f12 opens the terminal", opened, true);
+    check.expect_eq("the terminal is open with the folder", opened, true);
+    // Focus stays in the tree: Down there selects the open folder's row.
+    check.keys(window, "down");
+    let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
+    check.expect_eq(
+        "the tree keeps the focus",
+        selected,
+        Some(std::path::PathBuf::new()),
+    );
+    check.keys(window, "alt-f12");
 
     // Type once the prompt is up, as a person would.
     let prompt = wait_for(check, window, |lines| {

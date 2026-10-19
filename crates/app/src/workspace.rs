@@ -438,6 +438,9 @@ impl Workspace {
             window.set_window_title(&name.to_string_lossy());
         }
         self.watch(&root, window, cx);
+        // The terminal is open from the start (the user asked for it on by default); focus stays in
+        // the tree.
+        self.show_terminal(window, cx);
         // A folder that had a window when leaf last saved comes back as it was left.
         if let Some(saved) = session::load(&session::default_path())
             .window(&root)
@@ -633,7 +636,7 @@ impl Workspace {
         })
     }
 
-    /// Alt+F12, as in IntelliJ: opens the terminal (starting the shell the first time) and gives
+    /// Alt+F12, as in IntelliJ: shows the terminal (starting a shell when there is none) and gives
     /// it focus; pressed in the terminal, hides it and goes back to the editor.
     fn toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
         if self.terminal_focused(window, cx) {
@@ -644,15 +647,22 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if let Some(terminal) = self.show_terminal(window, cx) {
+            terminal.view.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Shows the terminal, starting a shell in the open folder when there is none. None when no
+    /// folder is open or the shell could not start.
+    fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<&Terminal> {
         if self.terminal.is_none() {
-            let Some(root) = self.root(cx) else {
-                return;
-            };
+            let root = self.root(cx)?;
             let started = match TerminalPanel::start(&root) {
                 Ok(started) => started,
                 Err(err) => {
                     eprintln!("leaf: could not start the shell: {err}");
-                    return;
+                    return None;
                 }
             };
             let view = cx.new(|cx| TerminalPanel::new(started, window, cx));
@@ -676,11 +686,9 @@ impl Workspace {
                 _subscription: subscription,
             });
         }
-        if let Some(terminal) = &mut self.terminal {
-            terminal.visible = true;
-            terminal.view.read(cx).focus_handle(cx).focus(window, cx);
-        }
-        cx.notify();
+        let terminal = self.terminal.as_mut()?;
+        terminal.visible = true;
+        Some(terminal)
     }
 
     fn tree_focused(&self, window: &Window, cx: &App) -> bool {

@@ -75,7 +75,7 @@ The keys follow IntelliJ IDEA.
 | | `Cmd+Shift+[` / `]` | Previous / next tab |
 | | `Cmd+Shift+V` | Markdown preview |
 | | `Cmd+=`, `Cmd+-`, `Cmd+0` | Zoom in, out, back to 100% |
-| | `Alt+F12` | Terminal in the open folder (in the terminal: hide it, the shell keeps running) |
+| | `Alt+F12` | Focus the terminal, which opens with the folder (in the terminal: hide it, the shell keeps running) |
 | Tree | `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown` | Move |
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
 | | `Enter` | Open the file (or toggle the folder) |
