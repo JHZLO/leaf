@@ -2,8 +2,7 @@
 
 # subwy
 
-A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust on
-[GPUI](https://github.com/zed-industries/zed) (through [GPUI Kit](https://github.com/longbridge/gpui-component)).
+A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust.
 
 Open a folder, walk its tree with the arrow keys (the way to the selection is drawn as a metro
 line, and glides as you move), copy paths in one keystroke, and read Markdown and code with
@@ -46,7 +45,7 @@ cargo run --release -p subwy -- ~/notes/todo.md  # open a file in its folder
 
 Without an argument subwy reopens the windows you left, each with its folders, tree and tabs.
 
-A window can hold several folders, as IntelliJ holds several modules: add one with `Cmd+O`
+A window can hold several folders: add one with `Cmd+O`
 (This Window) or the tree's more menu (Add Folder…), and take it out with Remove from Window on its
 row's right-click menu. Copied relative paths are relative to the file's own folder.
 
@@ -86,8 +85,6 @@ It opens `target/bundle/subwy.app` from this repository when that exists, else t
 macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.app` to choose another.
 
 ## Keys
-
-The keys follow IntelliJ IDEA.
 
 | Where | Keys | What |
 |---|---|---|
