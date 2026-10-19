@@ -23,7 +23,12 @@ pub struct Session {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowState {
+    /// The window's first folder, which names it.
     pub root: Option<PathBuf>,
+    /// The folders added after the first, in order. With any, the paths below start with the
+    /// folder's name (see `folders`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<PathBuf>,
     /// Open folders, relative to `root`.
     pub expanded: Vec<PathBuf>,
     pub selected: Option<PathBuf>,
@@ -109,6 +114,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_window_keeps_its_added_folders_and_old_files_read_without_them() {
+        let window = WindowState {
+            root: Some(PathBuf::from("/a")),
+            folders: vec![PathBuf::from("/b")],
+            ..WindowState::default()
+        };
+        let json = serde_json::to_value(&window).unwrap();
+        assert_eq!(json["folders"][0], "/b");
+        let single = serde_json::to_value(WindowState::default()).unwrap();
+        assert!(single.get("folders").is_none());
+        let old: WindowState = serde_json::from_str(r#"{"root": "/a"}"#).unwrap();
+        assert!(old.folders.is_empty());
+    }
+
+    #[test]
     fn remember_puts_the_folder_first_without_duplicates() {
         let mut recent: Vec<PathBuf> = (0..MAX_RECENT)
             .map(|i| PathBuf::from(format!("/f{i}")))
@@ -148,6 +168,7 @@ mod tests {
             active_tab: Some(1),
             tree_width: Some(260.5),
             preview: true,
+            ..WindowState::default()
         }
     }
 
