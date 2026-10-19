@@ -12,10 +12,10 @@ use std::{
 use gpui_kit::*;
 
 /// How long a move glides.
-const GLIDE: Duration = Duration::from_millis(320);
+const GLIDE: Duration = Duration::from_millis(200);
 /// The ring that leaves the station once it has arrived: when it starts, and how long it spreads.
-const PING_AFTER: Duration = Duration::from_millis(260);
-const PING: Duration = Duration::from_millis(700);
+const PING_AFTER: Duration = Duration::from_millis(160);
+const PING: Duration = Duration::from_millis(450);
 
 /// One leg of the route: from the row of the folder at its top down to the row of the next folder
 /// on the way, or of the selection. Rows are list positions, fractional mid-glide. `drawn` runs
