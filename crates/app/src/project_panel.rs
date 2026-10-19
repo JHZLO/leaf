@@ -20,6 +20,7 @@ use leaf_project::{
 };
 
 use crate::{
+    icons,
     keymap::{
         Collapse, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
         Rename, SelectFirst, SelectLast, SelectNext, SelectPrev, Trash,
@@ -34,6 +35,8 @@ const ROW_PADDING_RIGHT: f32 = 8.;
 const ROW_GAP: f32 = 4.;
 const CHEVRON_SLOT: f32 = 12.;
 const CHEVRON_SIZE: f32 = 10.;
+/// The file type icon after the chevron.
+const ICON_SIZE: f32 = 14.;
 
 /// Tree width limits at 100% zoom, and the strip at its right edge that drags it.
 const MIN_WIDTH: f32 = 180.;
@@ -828,6 +831,22 @@ impl ProjectPanel {
                     )
                 }),
         )
+        .child({
+            let (icon, tint) = if is_dir {
+                icons::folder_icon(row.expanded, row.path.as_os_str().is_empty())
+            } else {
+                icons::file_icon(&row.name)
+            };
+            let color = if row.ignored {
+                p.ignored
+            } else {
+                tint.color(p)
+            };
+            Icon::new(icon)
+                .size(z(ICON_SIZE, cx))
+                .flex_none()
+                .text_color(c(color))
+        })
         .map(|el| match rename {
             Some(edit) => el.child(edit_field(edit, cx)),
             None if row.path.as_os_str().is_empty() => el

@@ -7,6 +7,7 @@
 mod editor_tabs;
 mod empty_state;
 mod finder;
+pub mod icons;
 pub mod keymap;
 mod menus;
 mod preview;
@@ -60,7 +61,7 @@ pub fn run(arg: Option<PathBuf>) {
         eprintln!("leaf: no settings file written: {err}");
     }
     // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    let app = gpui_kit::application().with_assets(icons::LeafAssets);
     // Paths from Finder's Open With, `open -a leaf` and the leaf command. When they start leaf,
     // macOS hands them over before launching finishes, so they wait in the channel until then.
     let (opened, requests) = smol::channel::unbounded::<Vec<String>>();
@@ -152,24 +153,6 @@ mod tests {
             Some(PathBuf::from("/Users/me/한글.md"))
         );
         assert_eq!(path_from_url("file:///"), Some(PathBuf::from("/")));
-    }
-
-    /// Here rather than in theme.rs: a test there trips the recursion limit its `json!` needs.
-    #[test]
-    fn the_editor_selection_blends_to_the_selection_color() {
-        use crate::theme::{DARK, LIGHT, SELECTION_ALPHA, editor_selection};
-        for p in [&LIGHT, &DARK] {
-            let given = editor_selection(p);
-            for shift in [16, 8, 0] {
-                let channel = |value: u32| ((value >> shift) & 0xFF) as f32;
-                let blended =
-                    SELECTION_ALPHA * channel(given) + (1. - SELECTION_ALPHA) * channel(p.paper);
-                assert!(
-                    (blended - channel(p.sel_bg)).abs() <= 1.,
-                    "{given:06X} at {shift}"
-                );
-            }
-        }
     }
 
     #[test]

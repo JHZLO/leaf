@@ -36,7 +36,11 @@ fn main() {
         std::env::set_var("LEAF_SHELL", "/bin/sh");
     }
 
-    let mut cx = VisualTestAppContext::new(current_platform(false));
+    // The real assets, so icons show in the screenshots.
+    let mut cx = VisualTestAppContext::with_asset_source(
+        current_platform(false),
+        std::sync::Arc::new(leaf::icons::LeafAssets),
+    );
     cx.update(leaf::init);
     let mut check = check::Check {
         cx,

@@ -175,11 +175,11 @@ fn hex(value: u32) -> String {
 }
 
 /// How opaque gpui-kit lets the editor selection be: it caps the theme's selection color at 30%.
-pub(crate) const SELECTION_ALPHA: f32 = 0.3;
+const SELECTION_ALPHA: f32 = 0.3;
 
 /// The selection color to hand gpui-kit so that, drawn at its 30% over the paper, it comes out as
 /// `sel_bg`, the selection leaf's own views paint. Given `sel_bg` itself, a drag was barely visible.
-pub(crate) fn editor_selection(p: &Palette) -> u32 {
+fn editor_selection(p: &Palette) -> u32 {
     let channel = |shift: u32| {
         let wanted = ((p.sel_bg >> shift) & 0xFF) as f32;
         let paper = ((p.paper >> shift) & 0xFF) as f32;
@@ -305,4 +305,26 @@ pub fn init(cx: &mut App) {
     });
     Theme::sync_system_appearance(None, cx);
     set_zoom(100, cx);
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: that brings gpui's `test` attribute, which shadows the standard one.
+    use super::{DARK, LIGHT, SELECTION_ALPHA, editor_selection};
+
+    #[test]
+    fn the_editor_selection_blends_to_the_selection_color() {
+        for p in [&LIGHT, &DARK] {
+            let given = editor_selection(p);
+            for shift in [16, 8, 0] {
+                let channel = |value: u32| ((value >> shift) & 0xFF) as f32;
+                let blended =
+                    SELECTION_ALPHA * channel(given) + (1. - SELECTION_ALPHA) * channel(p.paper);
+                assert!(
+                    (blended - channel(p.sel_bg)).abs() <= 1.,
+                    "{given:06X} at {shift}"
+                );
+            }
+        }
+    }
 }
