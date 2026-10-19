@@ -259,6 +259,8 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
                 "punctuation.delimiter": style(p.syn_mark),
                 "punctuation.bracket": style(p.sub),
                 "text.literal": style(p.syn_literal),
+                // Markdown's `inline code`, which gpui-kit names apart from code blocks.
+                "text.code.span": style(p.syn_literal),
                 "string": style(p.syn_literal),
                 "string.escape": style(p.syn_literal),
                 "keyword": style(p.syn_keyword),
