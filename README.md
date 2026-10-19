@@ -34,31 +34,6 @@ Launch is timed from process start until the window is on screen; memory is the 
 physical footprint (`footprint`, what Activity Monitor shows as Memory); idle CPU is CPU time over
 10 seconds.
 
-### Next to other editors
-
-The other columns are what each vendor publishes, checked on 2026-10-19; nobody here measured
-them. A vendor's requirement is not what the editor uses, so read the rows as orders of
-magnitude, not as a benchmark.
-
-| | subwy (measured) | Zed 1.24.2 | VS Code 1.142 | Sublime Text 4 (4215) | IntelliJ IDEA 2026.2.3 |
-|---|---|---|---|---|---|
-| Built with | Rust, GPUI | Rust, GPUI | Electron | Its own UI framework, OpenGL | JVM (JetBrains Runtime) |
-| Download | 10.3 MB | no official figure | under 200 MB | no official figure | about 1.5 GB (Apple Silicon DMG) |
-| Disk space | 33 MB | no official figure | under 500 MB | no official figure | 10 GB required |
-| Memory | 60 MB in use | no official figure | 1 GB RAM recommended | no official figure | 8 GB RAM, 3 GB of it free for the IDE |
-| macOS | 13 or later | 12 to 26 | 12 or later | 10.13 or later | 15 and 26 |
-| Speed the vendor states | (measured above) | UI rendered at 120 fps (2023 blog post) | none published | GPU rendering, smooth up to 8K (2021 blog post) | none published |
-
-Sources: Zed [releases](https://zed.dev/releases/stable), [installation](https://zed.dev/docs/installation),
-[120 fps post](https://zed.dev/blog/videogame); VS Code [1.142](https://code.visualstudio.com/updates/v1_142),
-[requirements](https://code.visualstudio.com/docs/supporting/requirements),
-[download](https://code.visualstudio.com/download), [Electron](https://code.visualstudio.com/docs/editor/whyvscode);
-Sublime Text [download](https://www.sublimetext.com/download),
-[Build 4213](https://www.sublimetext.com/blog/articles/sublime-text-4213),
-[hardware-accelerated rendering](https://www.sublimetext.com/blog/articles/hardware-accelerated-rendering);
-IntelliJ IDEA [installation guide](https://www.jetbrains.com/help/idea/installation-guide.html),
-[release data](https://data.services.jetbrains.com/products/releases?code=IIU&latest=true&type=release).
-
 ## Build and run
 
 You need macOS and Rust (the toolchain in `rust-toolchain.toml` is picked up automatically).
