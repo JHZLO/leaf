@@ -7,7 +7,7 @@ use std::{
 };
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::{folders::Folders, paths, session, watch};
+use subwy_project::{folders::Folders, paths, session, watch};
 
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
@@ -96,7 +96,7 @@ struct OpenWindow {
     saved: Option<session::WindowState>,
 }
 
-/// Set by the offscreen UI checks: windows leaf opens itself then stay off screen and never take focus.
+/// Set by the offscreen UI checks: windows subwy opens itself then stay off screen and never take focus.
 pub struct OffscreenWindows;
 
 impl Global for OffscreenWindows {}
@@ -115,7 +115,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// The first windows: one for each of `paths` (folders, or files to open in their folder), or else
-/// the windows open when leaf last quit, or else an empty one.
+/// the windows open when subwy last quit, or else an empty one.
 pub fn open_at_start(paths: Vec<PathBuf>, cx: &mut App) {
     let mut opened = false;
     for path in paths {
@@ -136,7 +136,7 @@ pub fn open_at_start(paths: Vec<PathBuf>, cx: &mut App) {
     }
 }
 
-/// Opens a folder, or a file inside its folder, as leaf does for a path from the command line or
+/// Opens a folder, or a file inside its folder, as subwy does for a path from the command line or
 /// Finder: in the window that already has it, else in an empty window, else in a new one.
 /// Returns the window it used.
 pub fn open_path(path: &Path, cx: &mut App) -> Option<AnyWindowHandle> {
@@ -207,7 +207,7 @@ fn open_in(
         return open_window(Some(root), file, cx);
     };
     let background =
-        cx.has_global::<OffscreenWindows>() || std::env::var_os("LEAF_BACKGROUND").is_some();
+        cx.has_global::<OffscreenWindows>() || std::env::var_os("SUBWY_BACKGROUND").is_some();
     handle
         .update(cx, |_, window, cx| {
             workspace.update(cx, |workspace, cx| {
@@ -247,7 +247,7 @@ fn open_window(
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
-            title: Some("leaf".into()),
+            title: Some("subwy".into()),
             appears_transparent: true,
             traffic_light_position: Some(title_bar::traffic_lights()),
         }),
@@ -270,7 +270,7 @@ fn open_window(
     match opened {
         Ok((handle, _)) => Some(handle),
         Err(err) => {
-            eprintln!("leaf: could not open a window: {err}");
+            eprintln!("subwy: could not open a window: {err}");
             None
         }
     }
@@ -292,7 +292,7 @@ fn live_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
 }
 
 /// A window closed while others stay open drops out of the session. The app does not call this
-/// for the last one, so leaf quits with that window still in the session and reopens it next time.
+/// for the last one, so subwy quits with that window still in the session and reopens it next time.
 pub fn window_closed(id: WindowId, cx: &mut App) {
     cx.default_global::<Windows>()
         .open
@@ -315,7 +315,7 @@ fn write_session(cx: &App) {
         recent: windows.recent.clone(),
     };
     if let Err(err) = session::save(&session::default_path(), &saved) {
-        eprintln!("leaf: session not saved: {err}");
+        eprintln!("subwy: session not saved: {err}");
     }
 }
 
@@ -400,7 +400,7 @@ impl Workspace {
         }
     }
 
-    /// Opens `root` in this window, with the folders it had beside it when leaf last saved.
+    /// Opens `root` in this window, with the folders it had beside it when subwy last saved.
     pub fn set_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let saved = session::load(&session::default_path())
             .window(&root)
@@ -490,11 +490,11 @@ impl Workspace {
             &panel,
             window,
             |this, panel, event: &PanelEvent, window, cx| match event {
-                PanelEvent::Open { path, leaf_through } => {
-                    let leaf_through = *leaf_through;
+                PanelEvent::Open { path, pass_through } => {
+                    let pass_through = *pass_through;
                     this.tabs
-                        .update(cx, |tabs, cx| tabs.open(path, leaf_through, window, cx));
-                    if !leaf_through {
+                        .update(cx, |tabs, cx| tabs.open(path, pass_through, window, cx));
+                    if !pass_through {
                         this.focus_editor_area(window, cx);
                     }
                 }
@@ -564,7 +564,7 @@ impl Workspace {
                 panel.width = width;
             });
         } else if let Some(saved) = saved {
-            // A folder that had a window when leaf last saved comes back as it was left.
+            // A folder that had a window when subwy last saved comes back as it was left.
             panel.update(cx, |panel, cx| {
                 panel.restore(&saved.expanded, saved.selected.clone(), cx);
                 panel.width = saved.tree_width.unwrap_or(panel.width);
@@ -636,7 +636,7 @@ impl Workspace {
                     }
                     let _ = tx.send_blocking(changes);
                 })
-                .map_err(|err| eprintln!("leaf: not watching {}: {err}", root.display()))
+                .map_err(|err| eprintln!("subwy: not watching {}: {err}", root.display()))
                 .ok()
             })
             .collect();
@@ -1174,7 +1174,7 @@ impl Workspace {
             .arg(path)
             .spawn()
         {
-            eprintln!("leaf: could not reveal in Finder: {err}");
+            eprintln!("subwy: could not reveal in Finder: {err}");
         }
     }
 
@@ -1291,8 +1291,8 @@ impl Render for Workspace {
         };
         let language = active.map(|t| status_bar::language_label(&t.language));
         let line_ending = active.map(|t| match t.line_ending {
-            leaf_project::fs::LineEnding::Lf => "LF",
-            leaf_project::fs::LineEnding::Crlf => "CRLF",
+            subwy_project::fs::LineEnding::Lf => "LF",
+            subwy_project::fs::LineEnding::Crlf => "CRLF",
         });
         let zoom = cx.try_global::<theme::Zoom>().map_or(100, |z| z.0);
         let copied = self.copied.clone();

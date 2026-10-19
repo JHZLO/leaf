@@ -1,5 +1,5 @@
 //! The terminal: open with the folder, Alt+F12 gives it focus, typed text and keys reach the shell,
-//! Alt+F12 in it hides it (the shell lives on), and `exit` closes it. The shell is /bin/sh (`LEAF_SHELL`), so
+//! Alt+F12 in it hides it (the shell lives on), and `exit` closes it. The shell is /bin/sh (`SUBWY_SHELL`), so
 //! nobody's login files change what the checks see.
 
 use std::{
@@ -107,7 +107,7 @@ fn wait_for(check: &mut Check, window: AnyWindowHandle, found: impl Fn(&[String]
 fn wait_for_workspace(
     check: &mut Check,
     window: AnyWindowHandle,
-    found: impl Fn(&leaf::workspace::Workspace, &gpui_kit::App) -> bool,
+    found: impl Fn(&subwy::workspace::Workspace, &gpui_kit::App) -> bool,
 ) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

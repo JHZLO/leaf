@@ -1,4 +1,4 @@
-//! Phase 1: walk the tree, copy paths, leaf through, the preview, a code file, zoom, the empty window.
+//! Phase 1: walk the tree, copy paths, pass through, the preview, a code file, zoom, the empty window.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -27,7 +27,7 @@ pub fn run(check: &mut Check) {
     );
     check.shot(window, "1-tree-route-copied");
 
-    // Space opens it as the leaf-through tab and keeps focus in the tree.
+    // Space opens it as the pass-through tab and keeps focus in the tree.
     check.keys(window, "space");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
@@ -35,7 +35,7 @@ pub fn run(check: &mut Check) {
         active,
         Some(PathBuf::from("docs/guide/paths.md")),
     );
-    check.shot(window, "2-leaf-through");
+    check.shot(window, "2-pass-through");
 
     // Escape moves to the editor; the copy now carries the cursor line.
     check.keys(window, "escape cmd-alt-shift-c");

@@ -1,8 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="leaf">
-  <!-- macOS icon grid: the body is 824 of 1024 px, centered, so leaf sits at the size of other apps. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="subwy">
+  <!-- macOS icon grid: the body is 824 of 1024 px, centered, so subwy sits at the size of other apps. -->
   <g transform="translate(8.125 8.125) scale(0.8375)">
-    <rect x="2" y="2" width="96" height="96" rx="22" fill="#F7F4ED" stroke="#DDD6C8" stroke-width="1.5"/>
-    <path d="M50 14C72 30 78 54 64 74C58 82 42 82 36 74C22 54 28 30 50 14Z" fill="#DCE6CE" stroke="#4A7A2C" stroke-width="4.5" stroke-linejoin="round"/>
-    <path d="M50 26V88M50 38H59M50 52H41M50 64H58" fill="none" stroke="#4A7A2C" stroke-width="4.5" stroke-linecap="round"/>
+    <rect x="2" y="2" width="96" height="96" rx="22" fill="#FFFFFF" stroke="#E2E1DD" stroke-width="1.5"/>
+    <g fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M50 12V88" stroke="#FF7A00"/>
+      <path d="M18 76H82" stroke="#F0306E"/>
+      <path d="M12 62H36L62 36H82" stroke="#12A150"/>
+    </g>
+    <circle cx="50" cy="48" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3"/>
+    <circle cx="50" cy="76" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3"/>
+    <circle cx="82" cy="36" r="10.5" fill="#12A150" fill-opacity="0.22"/>
+    <circle cx="82" cy="36" r="6.5" fill="#12A150"/>
   </g>
 </svg>

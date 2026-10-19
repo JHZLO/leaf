@@ -5,7 +5,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use gpui_kit::{Modifiers, MouseButton, point, px};
-use leaf_project::session;
+use subwy_project::session;
 
 use crate::check::{Check, fixture};
 

@@ -6,7 +6,7 @@ use std::{
 };
 
 use gpui_kit::{test::TestWindowExt as _, *};
-use leaf::workspace::Workspace;
+use subwy::workspace::Workspace;
 
 pub const FILES: &[(&str, &str)] = &[
     (

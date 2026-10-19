@@ -8,7 +8,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-leaf-project = { path = "crates/project" }
+subwy-project = { path = "crates/project" }
 # The terminal panel's emulation and shell I/O (the engine Zed and Alacritty use; Apache-2.0).
 alacritty_terminal = "=0.26.0"
 gpui-kit = "=0.7.3"

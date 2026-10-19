@@ -1,12 +1,12 @@
 //! The terminal under the editor (IntelliJ's Terminal, Alt+F12): the user's shell in the open
-//! folder, painted cell by cell on leaf's paper. The shell and its screen live in
-//! `leaf_project::terminal`; this view paints the screen and turns keys, text and the mouse into
+//! folder, painted cell by cell on subwy's paper. The shell and its screen live in
+//! `subwy_project::terminal`; this view paints the screen and turns keys, text and the mouse into
 //! what the shell reads.
 
 use std::{cell::Cell, ops::Range, path::Path, rc::Rc};
 
 use gpui_kit::*;
-use leaf_project::terminal::{
+use subwy_project::terminal::{
     self, CursorShape, Event, EventListener, Frame, GridSize, Mods, Palette, Rgb, SelectionType,
     Shell, Side,
 };
@@ -79,11 +79,11 @@ fn color(value: Rgb) -> Hsla {
 }
 
 impl TerminalPanel {
-    /// Starts the login shell in `cwd`. `LEAF_SHELL` names another program, for the UI checks.
+    /// Starts the login shell in `cwd`. `SUBWY_SHELL` names another program, for the UI checks.
     /// The panel sizes the grid when it first paints.
     pub fn start(cwd: &Path) -> std::io::Result<Started> {
         let (tx, events) = smol::channel::unbounded();
-        let program = std::env::var("LEAF_SHELL").ok();
+        let program = std::env::var("SUBWY_SHELL").ok();
         let size = GridSize {
             cols: 80,
             rows: 24,
@@ -188,7 +188,7 @@ impl TerminalPanel {
     }
 
     /// Keys that are not text: Enter, arrows, Ctrl combinations. Text (and Hangul) comes in
-    /// through the input handler below; Cmd keys are leaf's.
+    /// through the input handler below; Cmd keys are subwy's.
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform {

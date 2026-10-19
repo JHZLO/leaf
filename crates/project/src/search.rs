@@ -115,7 +115,7 @@ fn search_inner(
                     let Some(path) = paths.get(i) else {
                         break;
                     };
-                    // The same rules as opening the file: what leaf cannot open, it does not search.
+                    // The same rules as opening the file: what subwy cannot open, it does not search.
                     let found = match fs::read_text(&resolve(path)) {
                         Ok(file) => search_text(&file.text, needle, limit),
                         Err(_) => Found::default(),

@@ -4,7 +4,7 @@ use std::{ops::Range, path::PathBuf, sync::Arc};
 
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::{
+use subwy_project::{
     folders::Folders,
     fuzzy,
     index::{self, FileIndex},

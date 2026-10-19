@@ -1,4 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="leaf">
-  <path d="M50 14C72 30 78 54 64 74C58 82 42 82 36 74C22 54 28 30 50 14Z" fill="#DCE6CE" stroke="#4A7A2C" stroke-width="7" stroke-linejoin="round"/>
-  <path d="M50 30V88" fill="none" stroke="#4A7A2C" stroke-width="7" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="subwy">
+  <!-- Below 24 px: thicker lines and no halo, so the three lines and the station stay apart. -->
+  <g fill="none" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M50 12V88" stroke="#FF7A00"/>
+    <path d="M18 76H82" stroke="#F0306E"/>
+    <path d="M12 62H36L62 36H80" stroke="#12A150"/>
+  </g>
+  <circle cx="50" cy="48" r="8" fill="#FFFFFF" stroke="#1B1D21" stroke-width="4"/>
+  <circle cx="50" cy="76" r="8" fill="#FFFFFF" stroke="#1B1D21" stroke-width="4"/>
+  <circle cx="82" cy="36" r="9" fill="#12A150"/>
 </svg>

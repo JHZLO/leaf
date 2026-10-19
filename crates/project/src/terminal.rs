@@ -233,13 +233,13 @@ fn grid_point<L>(term: &Term<L>, line: usize, col: usize) -> Point {
     term::viewport_to_point(term.grid().display_offset(), Point::new(line, Column(col)))
 }
 
-/// What leaf adds to the environment the shell inherits. An app started from the Dock has no
+/// What subwy adds to the environment the shell inherits. An app started from the Dock has no
 /// LANG, and without one shells and programs fall back to ASCII.
 fn shell_env(has_lang: bool) -> HashMap<String, String> {
     let mut env = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
-        ("TERM_PROGRAM".to_string(), "leaf".to_string()),
+        ("TERM_PROGRAM".to_string(), "subwy".to_string()),
     ]);
     if !has_lang {
         env.insert("LANG".to_string(), "en_US.UTF-8".to_string());
@@ -368,7 +368,7 @@ pub fn paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
     }
 }
 
-/// The colors programs choose from: 16 named ones from leaf's palette, then xterm's 6x6x6 cube
+/// The colors programs choose from: 16 named ones from subwy's palette, then xterm's 6x6x6 cube
 /// and gray ramp, plus the default text, background and cursor.
 pub struct Palette {
     table: [Rgb; 256],
@@ -785,10 +785,10 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_env_names_leaf_and_fills_in_a_missing_lang() {
+    fn the_shell_env_names_subwy_and_fills_in_a_missing_lang() {
         let env = shell_env(false);
         assert_eq!(env["TERM"], "xterm-256color");
-        assert_eq!(env["TERM_PROGRAM"], "leaf");
+        assert_eq!(env["TERM_PROGRAM"], "subwy");
         assert_eq!(env["LANG"], "en_US.UTF-8");
         assert!(!shell_env(true).contains_key("LANG"));
     }

@@ -1,8 +1,8 @@
 #!/bin/zsh
-# Builds leaf in release and assembles target/bundle/leaf.app, signed ad hoc.
+# Builds subwy in release and assembles target/bundle/subwy.app, signed ad hoc.
 #   scripts/bundle.sh          the app
-#   scripts/bundle.sh --dmg    the app and target/bundle/leaf-<version>.dmg
-# It only writes under target/; copying leaf.app to /Applications is up to you.
+#   scripts/bundle.sh --dmg    the app and target/bundle/subwy-<version>.dmg
+# It only writes under target/; copying subwy.app to /Applications is up to you.
 set -euo pipefail
 
 dmg=false
@@ -15,17 +15,17 @@ esac
 repo=${0:A:h:h}
 cd "$repo"
 
-# `cargo pkgid` ends in "#leaf@<version>".
-pkgid=$(cargo pkgid -p leaf)
+# `cargo pkgid` ends in "#subwy@<version>".
+pkgid=$(cargo pkgid -p subwy)
 version=${pkgid##*@}
 
-cargo build --release -p leaf
+cargo build --release -p subwy
 
 out=target/bundle
-app=$out/leaf.app
+app=$out/subwy.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/leaf "$app/Contents/MacOS/leaf"
+cp target/release/subwy "$app/Contents/MacOS/subwy"
 sed "s/@VERSION@/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 
@@ -48,13 +48,13 @@ image.draw(in: NSRect(x: 0, y: 0, width: size, height: size))
 NSGraphicsContext.restoreGraphicsState()
 try rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: args[1]))
 SWIFT
-iconset=$work/leaf.iconset
+iconset=$work/subwy.iconset
 mkdir "$iconset"
 for size in 16 32 128 256 512; do
   sips -z $size $size "$work/icon.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
   sips -z $((size * 2)) $((size * 2)) "$work/icon.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$app/Contents/Resources/leaf.icns"
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/subwy.icns"
 
 # Ad hoc: enough to run on this Mac. Giving it to others needs a Developer ID and notarization.
 codesign --force --deep -s - "$app"
@@ -66,7 +66,7 @@ if $dmg; then
   mkdir "$stage"
   cp -R "$app" "$stage/"
   ln -s /Applications "$stage/Applications"
-  image=$out/leaf-$version.dmg
-  hdiutil create -volname leaf -srcfolder "$stage" -ov -format UDZO "$image" >/dev/null
+  image=$out/subwy-$version.dmg
+  hdiutil create -volname subwy -srcfolder "$stage" -ov -format UDZO "$image" >/dev/null
   echo "$image"
 fi

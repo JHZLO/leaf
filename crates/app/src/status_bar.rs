@@ -8,7 +8,7 @@ use crate::theme::{self, c, size, z};
 
 /// How long the copied state stays before it fades back.
 pub const COPIED_FOR: Duration = Duration::from_millis(1500);
-/// The fade back: the only motion in leaf (design doc, interaction rules).
+/// The fade back: the only motion in subwy (design doc, interaction rules).
 pub const FADE: Duration = Duration::from_millis(200);
 
 /// What was just copied, shown on the stem until [`COPIED_FOR`] has passed.

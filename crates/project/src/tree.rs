@@ -210,7 +210,7 @@ impl ProjectTree {
         unread
     }
 
-    /// Follows a rename leaf made: the item keeps its open folders, their listings and the
+    /// Follows a rename subwy made: the item keeps its open folders, their listings and the
     /// selection, and its folder's listing shows the new name before it is read again.
     pub fn renamed(&mut self, from: &Path, to: &Path) {
         let moved = |path: PathBuf| match path.strip_prefix(from) {

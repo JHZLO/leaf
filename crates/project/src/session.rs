@@ -1,4 +1,4 @@
-//! What leaf reopens with: each window's folder, tree and tabs, the zoom and the recent folders.
+//! What subwy reopens with: each window's folder, tree and tabs, the zoom and the recent folders.
 
 use std::{
     io,
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Session {
-    /// The windows open when leaf last saved, in the order they were opened.
+    /// The windows open when subwy last saved, in the order they were opened.
     pub windows: Vec<WindowState>,
     /// UI zoom in percent, shared by every window; 0 means the default (100).
     pub zoom: u32,
@@ -67,16 +67,16 @@ pub struct TabState {
     pub column: u32,
 }
 
-/// `~/Library/Application Support/leaf/session.json`, or `LEAF_SESSION_PATH` so tests and
+/// `~/Library/Application Support/subwy/session.json`, or `SUBWY_SESSION_PATH` so tests and
 /// scripted runs never touch the real session.
 pub fn default_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LEAF_SESSION_PATH") {
+    if let Some(path) = std::env::var_os("SUBWY_SESSION_PATH") {
         return PathBuf::from(path);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Library/Application Support/leaf/session.json")
+    home.join("Library/Application Support/subwy/session.json")
 }
 
 /// A missing or unreadable session is an empty one: losing it must never block startup.
@@ -87,7 +87,7 @@ pub fn load(path: &Path) -> Session {
         .unwrap_or_default()
 }
 
-/// Reads both layouts: the list of windows, and the single window leaf saved before it had several
+/// Reads both layouts: the list of windows, and the single window subwy saved before it had several
 /// (the window's fields at the top level, beside the zoom and the recent folders).
 fn parse(bytes: &[u8]) -> Option<Session> {
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
@@ -199,7 +199,7 @@ mod tests {
     fn a_saved_session_loads_back_the_same() {
         let dir = tempfile::tempdir().unwrap();
         // The folder under Application Support may not exist yet.
-        let path = dir.path().join("leaf/session.json");
+        let path = dir.path().join("subwy/session.json");
         save(&path, &sample()).unwrap();
         assert_eq!(load(&path), sample());
     }

@@ -17,7 +17,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _,
     *,
 };
-use leaf_project::{
+use subwy_project::{
     folders::Folders,
     fs::{self, EntryKind, NameError},
     nav::{self, NavKey, SearchStep},
@@ -27,8 +27,8 @@ use leaf_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyPath, Expand, FocusEditor, LeafThrough, NewFile, Open, PROJECT_PANEL,
-        PageDown, PageUp, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
+        Collapse, CopyPath, Expand, FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
+        PassThrough, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
         Trash,
     },
     route,
@@ -94,8 +94,8 @@ fn tilde(path: &Path, home: Option<&Path>) -> String {
 }
 
 pub enum PanelEvent {
-    /// Open a file. `leaf_through` keeps focus in the tree and reuses the leaf-through tab.
-    Open { path: PathBuf, leaf_through: bool },
+    /// Open a file. `pass_through` keeps focus in the tree and reuses the pass-through tab.
+    Open { path: PathBuf, pass_through: bool },
     /// The header's locate button: select the active tab's file (IntelliJ's Select Opened File).
     Locate,
     /// The header's minus: hide the tree, as Cmd+1 in it does.
@@ -538,11 +538,13 @@ impl ProjectPanel {
             .justify_between()
             .pl(z(14., cx))
             .pr(z(6., cx))
+            // A small capital label, as on a station sign.
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(c(p.ink))
-                    .child("Project"),
+                    .text_size(z(11., cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c(p.sub))
+                    .child("PROJECT"),
             )
             .child(
                 div()
@@ -895,7 +897,7 @@ impl ProjectPanel {
         if kind == EntryKind::File {
             cx.emit(PanelEvent::Open {
                 path,
-                leaf_through: false,
+                pass_through: false,
             });
         }
     }
@@ -974,7 +976,7 @@ impl ProjectPanel {
         rows_per_page(list_height, z(size::TREE_ROW, cx).as_f32())
     }
 
-    fn open_selected(&mut self, leaf_through: bool, cx: &mut Context<Self>) {
+    fn open_selected(&mut self, pass_through: bool, cx: &mut Context<Self>) {
         let Some(selected) = self.tree.selected().map(Path::to_path_buf) else {
             return;
         };
@@ -994,7 +996,7 @@ impl ProjectPanel {
         } else {
             cx.emit(PanelEvent::Open {
                 path: selected,
-                leaf_through,
+                pass_through,
             });
         }
     }
@@ -1041,16 +1043,16 @@ impl ProjectPanel {
     }
 
     /// `selection` is `Some(focused)` on the selected row, whose ink dims when the tree has no
-    /// focus. `route` is the color of the route's line at a row on it: the row's chevron gives way
-    /// to the route's ring, its icon takes the line's color and its name is set in medium. The
-    /// backgrounds and the route itself are painted under the rows (see `route`).
+    /// focus. On a row `on_route`, the chevron gives way to the route's ring and the icon and name
+    /// stand out from the rest of the tree, whose icons stay faint. The backgrounds and the route
+    /// itself are painted under the rows (see `route`).
     /// The part of the name a speed search for `query` matched is set in semibold.
     /// With `rename`, the name is an input. A folder of the window (and the window's own node) is
     /// set in medium and shows `hint`, where it is on disk.
     fn render_row(
         row: &Row,
         selection: Option<bool>,
-        route: Option<u32>,
+        on_route: bool,
         query: Option<&str>,
         rename: Option<&EditView>,
         hint: Option<&SharedString>,
@@ -1071,7 +1073,7 @@ impl ProjectPanel {
             cx,
         )
         .text_color(c(ink))
-        .when(route.is_some() && !folder_row, |el| {
+        .when(on_route && !folder_row, |el| {
             el.font_weight(FontWeight::MEDIUM)
         })
         .child(
@@ -1081,7 +1083,7 @@ impl ProjectPanel {
                 .flex()
                 .items_center()
                 .justify_center()
-                .when(is_dir && route.is_none(), |slot| {
+                .when(is_dir && !on_route, |slot| {
                     slot.child(
                         Icon::default()
                             .data(CHEVRON)
@@ -1094,16 +1096,12 @@ impl ProjectPanel {
                 }),
         )
         .child({
-            let (icon, tint) = if is_dir {
-                icons::folder_icon(row.expanded, folder_row)
+            let icon = if is_dir {
+                icons::folder_icon(row.expanded)
             } else {
                 icons::file_icon(&row.name)
             };
-            let color = match route {
-                Some(line) => line,
-                None if row.ignored => p.ignored,
-                None => tint.color(p),
-            };
+            let color = if on_route { p.sub } else { p.ignored };
             Icon::new(icon)
                 .size(z(ICON_SIZE, cx))
                 .flex_none()
@@ -1141,7 +1139,7 @@ impl ProjectPanel {
 }
 
 /// A folder's listing. With several folders the window's node lists them.
-fn list(folders: &Folders, dir: &Path) -> std::io::Result<Vec<leaf_project::fs::DirEntry>> {
+fn list(folders: &Folders, dir: &Path) -> std::io::Result<Vec<subwy_project::fs::DirEntry>> {
     if folders.several() && dir.as_os_str().is_empty() {
         return Ok(folders.entries());
     }
@@ -1467,20 +1465,7 @@ impl Render for ProjectPanel {
         if self.route.moving(now) {
             window.request_animation_frame();
         }
-        // A folder on the route takes the color of the line leaving it; the selection, of the
-        // line reaching it.
-        let on_route: Vec<(usize, u32)> = stops
-            .iter()
-            .enumerate()
-            .map(|(depth, &line)| {
-                let leg = if depth + 1 == stops.len() {
-                    depth.saturating_sub(1)
-                } else {
-                    depth
-                };
-                (line, p.route[leg % p.route.len()])
-            })
-            .collect();
+        let on_route = stops.clone();
         let route_layer = {
             let (shape, ping) = (self.route.at(now), self.route.ping(now));
             let scroll = self.scroll.clone();
@@ -1556,7 +1541,7 @@ impl Render for ProjectPanel {
                 }
             }))
             .on_action(cx.listener(|this, _: &FocusEditor, window, cx| this.escape(window, cx)))
-            .on_action(cx.listener(|this, _: &LeafThrough, _, cx| {
+            .on_action(cx.listener(|this, _: &PassThrough, _, cx| {
                 if this.menu.is_some() {
                     return;
                 }
@@ -1634,15 +1619,7 @@ impl Render for ProjectPanel {
                                 items[range.clone()]
                                     .iter()
                                     .zip(range)
-                                    .map(|(item, line)| {
-                                        (
-                                            item,
-                                            on_route
-                                                .iter()
-                                                .find(|(l, _)| *l == line)
-                                                .map(|&(_, color)| color),
-                                        )
-                                    })
+                                    .map(|(item, line)| (item, on_route.contains(&line)))
                                     .map(|(item, route)| match (item, &edit) {
                                         (Item::Row(row), Some(edit))
                                             if renaming.as_deref() == Some(row.path.as_path()) =>
@@ -1766,7 +1743,7 @@ fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] 
         }
         _ => &[
             ("↩", "Open"),
-            ("Space", "Leaf through"),
+            ("Space", "Pass through"),
             ("⌘⇧C", "Copy path"),
         ],
     }
@@ -1797,16 +1774,16 @@ fn key_hints(keys: &'static [(&'static str, &'static str)], cx: &App) -> impl In
                 .gap(z(HINT_KEY_GAP, cx))
                 .child(
                     div()
-                        .h(z(17., cx))
+                        .h(z(18., cx))
                         .flex()
                         .items_center()
                         .px(z(KEY_CAP_PADDING, cx))
-                        .rounded(z(4., cx))
+                        .rounded(z(5., cx))
                         .border_1()
                         .border_color(c(p.line))
-                        .bg(c(p.paper))
-                        .text_color(c(p.ink))
-                        .text_size(z(11., cx))
+                        .bg(c(p.cur))
+                        .text_color(c(p.sub))
+                        .text_size(z(10.5, cx))
                         .child(key),
                 )
                 .child(label)
@@ -1817,7 +1794,7 @@ fn key_hints(keys: &'static [(&'static str, &'static str)], cx: &App) -> impl In
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use leaf_project::{fs::EntryKind, tree::Row};
+    use subwy_project::{fs::EntryKind, tree::Row};
 
     use super::{
         CHEVRON_SLOT, clamp_width, column_x, hint_keys, name_selection, row_padding, rows_per_page,
@@ -1856,7 +1833,7 @@ mod tests {
             ["Expand", "Parent", "Copy path"]
         );
         assert_eq!(labels(Some(&folder(false, true))), ["Parent", "Copy path"]);
-        assert_eq!(labels(None), ["Open", "Leaf through", "Copy path"]);
+        assert_eq!(labels(None), ["Open", "Pass through", "Copy path"]);
     }
 
     #[test]

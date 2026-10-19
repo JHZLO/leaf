@@ -3806,33 +3806,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
-name = "leaf"
-version = "0.1.0"
-dependencies = [
- "gpui-kit",
- "gpui-pre-platform",
- "image",
- "leaf-project",
- "serde_json",
- "smol",
- "tempfile",
-]
-
-[[package]]
-name = "leaf-project"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "ignore",
- "notify",
- "serde",
- "serde_json",
- "tempfile",
- "trash",
- "unicode-normalization",
-]
-
-[[package]]
 name = "lebe"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6589,6 +6562,33 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "subwy"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+ "gpui-pre-platform",
+ "image",
+ "serde_json",
+ "smol",
+ "subwy-project",
+ "tempfile",
+]
+
+[[package]]
+name = "subwy-project"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "ignore",
+ "notify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "trash",
+ "unicode-normalization",
+]
 
 [[package]]
 name = "svg_fmt"

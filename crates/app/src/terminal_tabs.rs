@@ -58,7 +58,7 @@ impl TerminalTabs {
         let started = match TerminalPanel::start(&self.cwd) {
             Ok(started) => started,
             Err(err) => {
-                eprintln!("leaf: could not start the shell: {err}");
+                eprintln!("subwy: could not start the shell: {err}");
                 return false;
             }
         };
@@ -196,11 +196,12 @@ impl TerminalTabs {
                         el.child(
                             div()
                                 .absolute()
-                                .left_0()
-                                .right_0()
+                                .left(z(12., cx))
+                                .right(z(6., cx))
                                 .bottom_0()
                                 .h(z(2., cx))
-                                .bg(c(p.accent)),
+                                .rounded(z(1., cx))
+                                .bg(c(p.ink)),
                         )
                     })
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {

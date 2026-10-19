@@ -13,7 +13,7 @@ use ignore::{WalkBuilder, WalkState};
 
 use crate::folders::Folders;
 
-/// More files than this stops the walk: a folder that big is not one leaf is meant for, and
+/// More files than this stops the walk: a folder that big is not one subwy is meant for, and
 /// the finder should still answer instead of reading the disk for minutes.
 pub const MAX_FILES: usize = 200_000;
 
@@ -31,7 +31,7 @@ pub fn build(root: &Path) -> FileIndex {
 }
 
 /// The finder's files across a window's folders: each folder's own, with its name in front when
-/// there are several (the paths the rest of leaf uses, see `folders`).
+/// there are several (the paths the rest of subwy uses, see `folders`).
 pub fn build_folders(folders: &Folders) -> FileIndex {
     if !folders.several() {
         return build(folders.first());
@@ -82,8 +82,8 @@ fn build_with_limit(root: &Path, limit: usize) -> FileIndex {
                 return WalkState::Continue;
             }
             let name = entry.file_name().to_string_lossy();
-            // `.leaf-save-*.tmp` lives only for the instant of an atomic save.
-            if name == ".DS_Store" || name.starts_with(".leaf-save-") {
+            // `.subwy-save-*.tmp` lives only for the instant of an atomic save.
+            if name == ".DS_Store" || name.starts_with(".subwy-save-") {
                 return WalkState::Continue;
             }
             let Ok(rel) = entry.path().strip_prefix(root) else {
@@ -199,7 +199,7 @@ mod tests {
             "docs/draft.md",
             "docs/guide.md",
             ".DS_Store",
-            ".leaf-save-1.tmp",
+            ".subwy-save-1.tmp",
         ] {
             write(root, path);
         }

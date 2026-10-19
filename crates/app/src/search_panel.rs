@@ -12,7 +12,7 @@ use std::{
 
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::{
+use subwy_project::{
     folders::Folders,
     index::{self, FileIndex},
     search::{self, Results},
@@ -292,7 +292,7 @@ impl SearchPanel {
 }
 
 /// The line with its matches in semibold: medium barely shows at 13 px, and green is for the
-/// leaf devices only.
+/// subwy devices only.
 fn matched_text(text: &str, ranges: &[Range<usize>]) -> StyledText {
     let matched = HighlightStyle {
         font_weight: Some(FontWeight::SEMIBOLD),

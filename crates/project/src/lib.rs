@@ -1,4 +1,4 @@
-//! The rules behind leaf: the folder tree, keyboard moves, copied paths and file I/O.
+//! The rules behind subwy: the folder tree, keyboard moves, copied paths and file I/O.
 //! Nothing here depends on GPUI, so these rules test in seconds.
 
 pub mod folders;

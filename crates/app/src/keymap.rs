@@ -1,4 +1,4 @@
-//! Every key binding in leaf, in one table (IntelliJ keys; the design doc's keymap section).
+//! Every key binding in subwy, in one table (IntelliJ keys; the design doc's keymap section).
 
 use gpui_kit::*;
 
@@ -43,7 +43,7 @@ actions!(
         PageUp,
         PageDown,
         Open,
-        LeafThrough,
+        PassThrough,
         FocusEditor,
         NewFile,
         Rename,
@@ -80,7 +80,7 @@ actions!(
 
 /// Binds the user's extra keys from the settings file. Returns the first one that could not be bound.
 pub fn bind_overrides(
-    overrides: &[leaf_project::settings::KeyOverride],
+    overrides: &[subwy_project::settings::KeyOverride],
     cx: &mut App,
 ) -> Option<String> {
     let mut problem = None;
@@ -146,7 +146,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("pageup", PageUp, panel),
         KeyBinding::new("pagedown", PageDown, panel),
         KeyBinding::new("enter", Open, panel),
-        KeyBinding::new("space", LeafThrough, panel),
+        KeyBinding::new("space", PassThrough, panel),
         KeyBinding::new("escape", FocusEditor, panel),
         KeyBinding::new("cmd-shift-o", ToggleFinder, ws),
         KeyBinding::new("cmd-shift-f", ToggleSearch, ws),

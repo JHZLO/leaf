@@ -1,4 +1,4 @@
-//! Watches the open folder and reports, in batches, which folders and files changed outside leaf.
+//! Watches the open folder and reports, in batches, which folders and files changed outside subwy.
 
 use std::{
     collections::BTreeSet,
@@ -48,7 +48,7 @@ impl Watcher {
             })?;
         inner.watch(root, notify::RecursiveMode::Recursive)?;
         thread::Builder::new()
-            .name("leaf-watch".into())
+            .name("subwy-watch".into())
             .spawn(move || debounce(&receiver, &roots, &on_change))
             .map_err(notify::Error::io)?;
         Ok(Self { _inner: inner })

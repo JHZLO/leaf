@@ -1,6 +1,6 @@
 //! The folders one window shows. With one folder, paths are relative to it, as they always were.
 //! With several, the first component of a path names its folder, as if one folder held them all
-//! (IntelliJ shows them as modules under the window's node), so the rest of leaf keeps working
+//! (IntelliJ shows them as modules under the window's node), so the rest of subwy keeps working
 //! with relative paths and only this table knows where they are on disk.
 
 use std::path::{Component, Path, PathBuf};
@@ -109,7 +109,7 @@ impl Folders {
         })
     }
 
-    /// The path leaf uses for `abs`, when one of the folders holds it (the deepest one, if they
+    /// The path subwy uses for `abs`, when one of the folders holds it (the deepest one, if they
     /// nest).
     pub fn relative(&self, abs: &Path) -> Option<PathBuf> {
         let (index, rest) = self

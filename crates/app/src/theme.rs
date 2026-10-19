@@ -1,4 +1,4 @@
-//! leaf's paper palette and sizes. The single source of every color: leaf's own views read
+//! subwy's paper palette and sizes. The single source of every color: subwy's own views read
 //! `colors(cx)`, and the gpui-kit theme (editor, scrollbars, menus) is generated from the same values.
 
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeRegistry, highlighter::LanguageRegistry};
@@ -33,73 +33,73 @@ pub struct Palette {
     /// The terminal's 16 named colors (black, red, green, yellow, blue, magenta, cyan, white,
     /// then their bright forms), toned to the paper like the syntax colors.
     pub ansi: [u32; 16],
-    /// The tree's route: the line leaving each depth's folder, the open folder's first, toned to
-    /// the paper like metro-map lines.
+    /// The tree's route: the line leaving each depth's folder, the open folder's first, in the
+    /// bright colors of metro-map lines. The logo is the first three.
     pub route: [u32; 6],
 }
 
 pub const LIGHT: Palette = Palette {
-    paper: 0xF7F4ED,
-    side: 0xEFEBE2,
-    desk: 0xE8E3D8,
-    line: 0xDDD6C8,
-    frame: 0xD3CCBD,
-    ink: 0x2D2A25,
-    sub: 0x6F695F,
-    num: 0xA39C90,
-    ignored: 0xA29B8F,
-    accent: 0x4A7A2C,
-    accent_text: 0x3E6A22,
-    sel_bg: 0xC3D6AD,
+    paper: 0xFBFAF8,
+    side: 0xF3F2EF,
+    desk: 0xEDECE9,
+    line: 0xE7E5E1,
+    frame: 0xD9D7D2,
+    ink: 0x1F2023,
+    sub: 0x6B6C70,
+    num: 0xB5B4B0,
+    ignored: 0xA2A3A7,
+    accent: 0x12A150,
+    accent_text: 0x0E8A44,
+    sel_bg: 0xC3D6AE,
     sel_ink: 0x26401A,
-    tree_sel: 0xE3EAD9,
-    cur: 0xF0ECE3,
-    hover: 0xE7E2D7,
-    guide: 0xDAD3C5,
-    fold: 0xCFC7B6,
-    syn_title: 0x3B5E25,
-    syn_mark: 0xA39C90,
-    syn_literal: 0x94572A,
-    syn_keyword: 0x7A4E9C,
-    syn_type: 0x2F6B8A,
-    syn_comment: 0x9A9387,
+    tree_sel: 0xECEAE5,
+    cur: 0xF4F2EE,
+    hover: 0xF1EFEB,
+    guide: 0xE0DED9,
+    fold: 0xD5D3CE,
+    syn_title: 0x1A7F46,
+    syn_mark: 0xA2A3A7,
+    syn_literal: 0xB4530F,
+    syn_keyword: 0x8B3FD9,
+    syn_type: 0x1D6FD8,
+    syn_comment: 0x9C9DA1,
     ansi: [
         0x2D2A25, 0xA63D2F, 0x4A7A2C, 0x8A6516, 0x2F6B8A, 0x7A4E9C, 0x2E7672, 0x8F887C, 0x6F695F,
         0xC0493A, 0x5E9440, 0xA97B1C, 0x3B7FA6, 0x9461B8, 0x3A9894, 0xB3AC9F,
     ],
-    route: [0x4A7A2C, 0xA86A0E, 0xB4512D, 0x2E68A3, 0x7A4A9C, 0x227A6C],
+    route: [0x12A150, 0xF07800, 0xE5306A, 0x1E6BFF, 0x7B4DFF, 0x0E9F94],
 };
 
 pub const DARK: Palette = Palette {
-    paper: 0x23211D,
-    side: 0x1D1B18,
-    desk: 0x191714,
-    line: 0x34302A,
-    frame: 0x3B362F,
-    ink: 0xE3DDD2,
-    sub: 0xA39B8D,
-    num: 0x6E675C,
-    ignored: 0x776F63,
-    accent: 0x8DBF6A,
-    accent_text: 0x9CCB78,
-    sel_bg: 0x46623A,
+    paper: 0x151619,
+    side: 0x111214,
+    desk: 0x0D0E10,
+    line: 0x24262A,
+    frame: 0x24262B,
+    ink: 0xE7E7E5,
+    sub: 0x8D8F95,
+    num: 0x4A4C52,
+    ignored: 0x5E6066,
+    accent: 0x2BD47A,
+    accent_text: 0x4CE08F,
+    sel_bg: 0x405A36,
     sel_ink: 0xD6EBC4,
-    tree_sel: 0x2C3326,
-    cur: 0x2A2723,
-    hover: 0x24221E,
-    guide: 0x3A352E,
-    fold: 0x4A443B,
-    syn_title: 0x9CCB78,
-    syn_mark: 0x7D7568,
-    syn_literal: 0xD7A46B,
-    syn_keyword: 0xC9A0DC,
-    syn_type: 0x7FB3CF,
-    syn_comment: 0x7D7568,
+    tree_sel: 0x22242A,
+    cur: 0x1A1C20,
+    hover: 0x1C1E22,
+    guide: 0x2A2D33,
+    fold: 0x3A3D44,
+    syn_title: 0x4CE08F,
+    syn_mark: 0x5E6066,
+    syn_literal: 0xF5B379,
+    syn_keyword: 0xC4A1FF,
+    syn_type: 0x7CB7FF,
+    syn_comment: 0x6E7076,
     ansi: [
         0x3B362F, 0xE07A68, 0x8DBF6A, 0xD7A46B, 0x7FB3CF, 0xC9A0DC, 0x7CC4BE, 0xE3DDD2, 0x7D7568,
         0xF09080, 0x9CCB78, 0xE6BC85, 0x98C5DE, 0xD6B4E6, 0x94D4CE, 0xF5F1EA,
     ],
-    route: [0x8DBF6A, 0xE0A94F, 0xE07F5F, 0x79A8DC, 0xB892D6, 0x5DBFAE],
+    route: [0x2BD47A, 0xFF9A3D, 0xFF5A92, 0x5B93FF, 0xA47BFF, 0x3DD6C8],
 };
 
 /// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.
@@ -187,7 +187,7 @@ fn hex(value: u32) -> String {
 const SELECTION_ALPHA: f32 = 0.3;
 
 /// The selection color to hand gpui-kit so that, drawn at its 30% over the paper, it comes out as
-/// `sel_bg`, the selection leaf's own views paint. Given `sel_bg` itself, a drag was barely visible.
+/// `sel_bg`, the selection subwy's own views paint. Given `sel_bg` itself, a drag was barely visible.
 fn editor_selection(p: &Palette) -> u32 {
     let channel = |shift: u32| {
         let wanted = ((p.sel_bg >> shift) & 0xFF) as f32;
@@ -294,19 +294,19 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
     })
 }
 
-/// Registers the leaf light and dark themes and follows the system appearance.
+/// Registers the subwy light and dark themes and follows the system appearance.
 pub fn init(cx: &mut App) {
     let set = serde_json::json!({
-        "name": "leaf",
-        "themes": [theme_config("Leaf Light", "light", &LIGHT, cx), theme_config("Leaf Dark", "dark", &DARK, cx)],
+        "name": "subwy",
+        "themes": [theme_config("Subwy Light", "light", &LIGHT, cx), theme_config("Subwy Dark", "dark", &DARK, cx)],
     });
     let registry = ThemeRegistry::global_mut(cx);
     if let Err(err) = registry.load_themes_from_str(&set.to_string()) {
-        eprintln!("leaf: theme did not load: {err}");
+        eprintln!("subwy: theme did not load: {err}");
         return;
     }
-    let light = registry.themes().get("Leaf Light").cloned();
-    let dark = registry.themes().get("Leaf Dark").cloned();
+    let light = registry.themes().get("Subwy Light").cloned();
+    let dark = registry.themes().get("Subwy Dark").cloned();
     Theme::update(cx, |theme| {
         if let Some(light) = light {
             theme.light_theme = light;
@@ -320,7 +320,7 @@ pub fn init(cx: &mut App) {
     highlight_markdown();
 }
 
-/// Swaps in leaf's Markdown highlights, which also mark tables, task boxes and link definitions.
+/// Swaps in subwy's Markdown highlights, which also mark tables, task boxes and link definitions.
 fn highlight_markdown() {
     let registry = LanguageRegistry::singleton();
     if let Some(mut config) = registry.language("markdown") {

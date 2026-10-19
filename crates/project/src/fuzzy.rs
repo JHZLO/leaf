@@ -373,7 +373,7 @@ mod tests {
         assert!(found.iter().all(|m| m.positions.is_empty()));
     }
 
-    /// Run with `cargo test --release -p leaf-project -- --ignored --nocapture fuzzy`.
+    /// Run with `cargo test --release -p subwy-project -- --ignored --nocapture fuzzy`.
     #[test]
     #[ignore]
     fn fifty_thousand_paths_per_keystroke() {

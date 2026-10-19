@@ -6,13 +6,13 @@ use std::{
 };
 
 use gpui_kit::AnyWindowHandle;
-use leaf::workspace::{self, OffscreenWindows};
-use leaf_project::session;
+use subwy::workspace::{self, OffscreenWindows};
+use subwy_project::session;
 
 use crate::check::{Check, fixture};
 
 pub fn run(check: &mut Check) {
-    // Windows leaf opens by itself (not through Check::open) stay off screen as well.
+    // Windows subwy opens by itself (not through Check::open) stay off screen as well.
     check.cx.update(|cx| cx.set_global(OffscreenWindows));
 
     let notes = fixture();
@@ -183,7 +183,7 @@ fn new_windows(check: &mut Check, before: &[AnyWindowHandle]) -> Vec<AnyWindowHa
         .collect()
 }
 
-/// Closes a window as its close button does, and tells leaf, as the app's close handler does.
+/// Closes a window as its close button does, and tells subwy, as the app's close handler does.
 fn close(check: &mut Check, window: AnyWindowHandle) {
     check
         .cx

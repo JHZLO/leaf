@@ -1,4 +1,4 @@
-//! The strings leaf copies: absolute paths, paths relative to the open folder, and `path:line`.
+//! The strings subwy copies: absolute paths, paths relative to the open folder, and `path:line`.
 
 use std::{ffi::OsStr, path::Path};
 

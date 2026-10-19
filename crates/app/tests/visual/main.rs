@@ -1,6 +1,6 @@
-//! Offscreen UI checks. Builds the real leaf window off screen, drives it with keystrokes, checks the
+//! Offscreen UI checks. Builds the real subwy window off screen, drives it with keystrokes, checks the
 //! results and saves screenshots to target/visual/. It never shows a window, never takes the keyboard
-//! and never touches the real session. Run with `cargo test -p leaf --test visual`.
+//! and never touches the real session. Run with `cargo test -p subwy --test visual`.
 //! Each feature keeps its scenarios in its own module.
 
 mod check;
@@ -33,17 +33,17 @@ fn main() {
     .expect("write settings");
     // Safe: set before anything else runs, on the only thread.
     unsafe {
-        std::env::set_var("LEAF_SESSION_PATH", session.path());
-        std::env::set_var("LEAF_SETTINGS_PATH", settings.path());
-        std::env::set_var("LEAF_SHELL", "/bin/sh");
+        std::env::set_var("SUBWY_SESSION_PATH", session.path());
+        std::env::set_var("SUBWY_SETTINGS_PATH", settings.path());
+        std::env::set_var("SUBWY_SHELL", "/bin/sh");
     }
 
     // The real assets, so icons show in the screenshots.
     let mut cx = VisualTestAppContext::with_asset_source(
         current_platform(false),
-        std::sync::Arc::new(leaf::icons::LeafAssets),
+        std::sync::Arc::new(subwy::icons::SubwyAssets),
     );
-    cx.update(leaf::init);
+    cx.update(subwy::init);
     // An offscreen window draws only on input, so the tree's route is shot where it settles.
     cx.update(|cx| cx.set_reduce_motion(true));
     let mut check = check::Check {

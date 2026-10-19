@@ -247,8 +247,8 @@ pub fn paint(
                     window,
                     look,
                     (depth as f32, leg.top),
-                    6. * (0.3 + 0.7 * shown),
-                    2.5,
+                    5. * (0.3 + 0.7 * shown),
+                    2.,
                     (look.ring.opacity(shown), look.paper.opacity(shown)),
                 );
             }
@@ -272,17 +272,17 @@ pub fn paint(
                     window,
                     look,
                     (depth, row),
-                    6. * (1. + 2. * spread),
+                    5. * (1. + 2. * spread),
                     color.opacity(0.4 * (1. - spread)),
                 );
             }
-            dot(window, look, (depth, row), 10., color.opacity(0.2));
-            dot(window, look, (depth, row), 6., color);
+            dot(window, look, (depth, row), 9., color.opacity(0.18));
+            dot(window, look, (depth, row), 5., color);
         }
     });
 }
 
-/// A row's rounded background, from just left of its chevron to the right end.
+/// A row's background, from just left of its chevron to the right end, with soft corners.
 fn band(window: &mut Window, look: &Look, depth: f32, row: f32, color: Hsla) {
     let left = look.x(depth) - look.px(11.);
     let height = look.row - look.px(2.);
@@ -292,7 +292,7 @@ fn band(window: &mut Window, look: &Look, depth: f32, row: f32, color: Hsla) {
             Bounds::new(point(left, top), size(look.right - left, height)),
             color,
         )
-        .corner_radii(height / 2.),
+        .corner_radii(look.px(6.)),
     );
 }
 
@@ -309,7 +309,7 @@ fn stroke(window: &mut Window, look: &Look, depth: usize, leg: &Leg, dashed: boo
     let mut path = if dashed {
         PathBuilder::stroke(look.px(2.)).dash_array(&[look.px(3.), look.px(3.)])
     } else {
-        PathBuilder::stroke(look.px(3.))
+        PathBuilder::stroke(look.px(2.5))
     };
     path.move_to(point(from_x, top));
     path.line_to(point(from_x, top + (bend - top) * run));

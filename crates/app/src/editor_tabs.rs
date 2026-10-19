@@ -1,4 +1,4 @@
-//! Open files as tabs, each over one gpui-kit editor: the leaf-through tab, the paper sheet, saving.
+//! Open files as tabs, each over one gpui-kit editor: the pass-through tab, the paper sheet, saving.
 
 use std::{
     io,
@@ -14,7 +14,7 @@ use gpui_kit::component::{
     tooltip::Tooltip,
 };
 use gpui_kit::{assets::IconName, prelude::FluentBuilder as _, *};
-use leaf_project::{
+use subwy_project::{
     folders::Folders,
     fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile},
     markdown::{self, Edit, Emphasis},
@@ -22,10 +22,9 @@ use leaf_project::{
 };
 
 use crate::{
-    icons,
     keymap::{IndentItem, MARKDOWN, Newline, OutdentItem, ToggleBold, ToggleItalic},
     preview::Preview,
-    theme::{self, c, size, z},
+    theme::{self, Palette, c, size, z},
 };
 
 /// How far up and down from a list item Tab looks for its list's indent unit; nearby lines
@@ -36,8 +35,8 @@ pub struct Tab {
     /// Relative to the open folder.
     pub path: PathBuf,
     pub editor: Entity<EditorState>,
-    /// Opened with Space from the tree; replaced by the next leaf-through, kept once edited or opened with Enter.
-    pub leaf_through: bool,
+    /// Opened with Space from the tree; replaced by the next pass-through, kept once edited or opened with Enter.
+    pub pass_through: bool,
     pub dirty: bool,
     pub read_only: bool,
     pub line_ending: LineEnding,
@@ -67,7 +66,7 @@ pub struct TabsChanged;
 struct PendingOpen {
     id: u64,
     path: PathBuf,
-    leaf_through: bool,
+    pass_through: bool,
     /// Where to put the cursor once open (zero-based line and column), for a restored session.
     cursor: Option<(u32, u32)>,
 }
@@ -219,6 +218,78 @@ impl EditorTabs {
         self.active.and_then(|i| self.tabs.get(i))
     }
 
+    /// The color of the route line that reaches `path` in the tree, so a file's tab and its
+    /// station agree. The open folder is depth 0; with several folders, each folder's row is.
+    fn station_color(&self, path: &Path, p: &Palette) -> u32 {
+        let depth = path.components().count() - usize::from(self.folders.several());
+        p.route[depth.saturating_sub(1) % p.route.len()]
+    }
+
+    /// The active file's place under the tab bar: its folders, a diagonal between each as on a
+    /// metro map, then the file at its station.
+    fn render_route_path(&self, tab: &Tab, cx: &App) -> impl IntoElement + use<> {
+        let p = theme::colors(cx);
+        let parts: Vec<String> = tab
+            .path
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let (file, folders) = parts
+            .split_last()
+            .map_or(("", &[][..]), |(f, d)| (f.as_str(), d));
+        let slash = |cx: &App| {
+            let color = c(p.num);
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let mut path = PathBuilder::stroke(bounds.size.width / 5.);
+                    path.move_to(point(bounds.right(), bounds.top()));
+                    path.line_to(point(bounds.left(), bounds.bottom()));
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                },
+            )
+            .flex_none()
+            .w(z(6., cx))
+            .h(z(11., cx))
+        };
+        div()
+            .h(z(30., cx))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(z(8., cx))
+            .px(z(18., cx))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_size(z(12., cx))
+            .text_color(c(p.sub))
+            .children(folders.iter().flat_map(|name| {
+                [
+                    div().flex_none().child(name.clone()).into_any_element(),
+                    slash(cx).into_any_element(),
+                ]
+            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(z(6., cx))
+                    .text_color(c(p.ink))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(z(6., cx))
+                            .rounded_full()
+                            .bg(c(self.station_color(&tab.path, p))),
+                    )
+                    .child(file.to_string()),
+            )
+    }
+
     /// How many tabs have edits that are not on disk.
     pub fn tabs_unsaved(&self) -> usize {
         self.tabs.iter().filter(|t| t.dirty).count()
@@ -243,32 +314,32 @@ impl EditorTabs {
     pub fn open(
         &mut self,
         path: &Path,
-        leaf_through: bool,
+        pass_through: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
-            if !leaf_through {
-                self.tabs[index].leaf_through = false;
+            if !pass_through {
+                self.tabs[index].pass_through = false;
             }
             self.activate(index, window, cx);
             return;
         }
         if let Some(pending) = self.pending.iter_mut().find(|p| p.path == path) {
             // Already being read; Enter on a file still loading from Space makes it a normal tab.
-            pending.leaf_through &= leaf_through;
+            pending.pass_through &= pass_through;
             return;
         }
-        if leaf_through {
+        if pass_through {
             // Walking the tree with Space, only the newest file is worth showing.
-            self.pending.retain(|p| !p.leaf_through);
+            self.pending.retain(|p| !p.pass_through);
         }
         let id = self.next_open;
         self.next_open += 1;
         self.pending.push(PendingOpen {
             id,
             path: path.to_path_buf(),
-            leaf_through,
+            pass_through,
             cursor: None,
         });
         let abs = self.abs(path);
@@ -291,13 +362,13 @@ impl EditorTabs {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A newer leaf-through may have replaced this request while the file was read.
+        // A newer pass-through may have replaced this request while the file was read.
         let Some(ix) = self.pending.iter().position(|p| p.id == id) else {
             return;
         };
         let PendingOpen {
             path,
-            leaf_through,
+            pass_through,
             cursor,
             ..
         } = self.pending.remove(ix);
@@ -311,15 +382,15 @@ impl EditorTabs {
             }
         };
         self.error = None;
-        let tab = self.new_tab(path, leaf_through, file, window, cx);
+        let tab = self.new_tab(path, pass_through, file, window, cx);
         if let Some((line, column)) = cursor {
             tab.editor.update(cx, |state, cx| {
                 state.set_cursor_position(Position::new(line, column), window, cx)
             });
         }
-        // A new leaf-through replaces the previous one in place.
-        let index = match self.tabs.iter().position(|t| t.leaf_through) {
-            Some(i) if leaf_through => {
+        // A new pass-through replaces the previous one in place.
+        let index = match self.tabs.iter().position(|t| t.pass_through) {
+            Some(i) if pass_through => {
                 self.tabs[i] = tab;
                 i
             }
@@ -345,7 +416,7 @@ impl EditorTabs {
     fn new_tab(
         &mut self,
         path: PathBuf,
-        leaf_through: bool,
+        pass_through: bool,
         file: TextFile,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -386,7 +457,7 @@ impl EditorTabs {
         Tab {
             path,
             editor,
-            leaf_through,
+            pass_through,
             dirty: false,
             read_only: file.mixed_line_endings,
             line_ending: file.line_ending,
@@ -404,7 +475,7 @@ impl EditorTabs {
     fn edited(&mut self, editor: &Entity<EditorState>, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| &t.editor == editor) {
             tab.dirty = true;
-            tab.leaf_through = false;
+            tab.pass_through = false;
             tab.edits += 1;
         }
         if let Some(preview) = self.preview.clone()
@@ -518,7 +589,7 @@ impl EditorTabs {
                 tab.stamp = stamp;
                 tab.deleted = false;
                 tab.conflict = None;
-                tab.leaf_through = false;
+                tab.pass_through = false;
                 // Typing while the file was written leaves edits the file does not have yet.
                 if tab.edits == edits {
                     tab.dirty = false;
@@ -568,11 +639,11 @@ impl EditorTabs {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            leaf_button("cancel", "Cancel", cx)
+                            subwy_button("cancel", "Cancel", cx)
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
-                            leaf_button("overwrite", "Overwrite", cx)
+                            subwy_button("overwrite", "Overwrite", cx)
                                 .on_click(move |_, window, cx| click(window, cx)),
                         ),
                 )
@@ -688,15 +759,15 @@ impl EditorTabs {
                 .footer(
                     DialogFooter::new()
                         .child(
-                            leaf_button("dont-save", "Don't save", cx)
+                            subwy_button("dont-save", "Don't save", cx)
                                 .on_click(move |_, window, cx| discard(window, cx)),
                         )
                         .child(
-                            leaf_button("cancel", "Cancel", cx)
+                            subwy_button("cancel", "Cancel", cx)
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
-                            leaf_button("save", "Save", cx)
+                            subwy_button("save", "Save", cx)
                                 .on_click(move |_, window, cx| click(window, cx)),
                         ),
                 )
@@ -715,7 +786,7 @@ impl EditorTabs {
         cx.notify();
     }
 
-    /// Files changed on disk outside leaf (relative to the open folder, as the watcher reports them).
+    /// Files changed on disk outside subwy (relative to the open folder, as the watcher reports them).
     /// A clean tab reloads, a tab with edits shows a banner, a deleted file marks its tab.
     pub fn files_changed(
         &mut self,
@@ -890,12 +961,12 @@ impl EditorTabs {
                 div()
                     .flex()
                     .gap(z(8., cx))
-                    .child(leaf_button("reload", "Reload", cx).on_click(cx.listener(
+                    .child(subwy_button("reload", "Reload", cx).on_click(cx.listener(
                         move |this, _: &ClickEvent, window, cx| {
                             this.reload_from_disk(id, window, cx)
                         },
                     )))
-                    .child(leaf_button("keep-mine", "Keep mine", cx).on_click(
+                    .child(subwy_button("keep-mine", "Keep mine", cx).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| this.keep_mine(id, cx)),
                     )),
             )
@@ -904,7 +975,7 @@ impl EditorTabs {
     /// Opens `path` with the cursor on `line` (zero-based), as a normal tab; for search results.
     pub fn open_at(&mut self, path: &Path, line: u32, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.tabs.iter().position(|t| t.path == path) {
-            self.tabs[index].leaf_through = false;
+            self.tabs[index].pass_through = false;
             let editor = self.tabs[index].editor.clone();
             editor.update(cx, |state, cx| {
                 state.set_cursor_position(Position::new(line, 0), window, cx)
@@ -1112,7 +1183,7 @@ impl EditorTabs {
             .map(|(i, tab)| {
                 let active = self.active == Some(i);
                 let name = file_name(&tab.path);
-                let (icon, tint) = icons::file_icon(&name);
+                let station = self.station_color(&tab.path, p);
                 let group = SharedString::from(format!("editor-tab-{i}"));
                 div()
                     .id(("tab", i))
@@ -1122,26 +1193,12 @@ impl EditorTabs {
                     .h_full()
                     .flex()
                     .items_center()
-                    .gap(z(7., cx))
-                    .pl(z(14., cx))
-                    .pr(z(8., cx))
-                    .border_r_1()
-                    .border_color(c(p.line))
+                    .gap(z(8., cx))
+                    .px(z(12., cx))
                     .text_color(c(if active && !tab.deleted { p.ink } else { p.sub }))
-                    .map(|el| {
-                        if active {
-                            el.bg(c(p.paper))
-                        } else {
-                            el.hover(|style| style.bg(c(p.hover)))
-                        }
-                    })
-                    .when(tab.leaf_through, |el| el.italic())
-                    .child(
-                        Icon::new(icon)
-                            .size(z(14., cx))
-                            .flex_none()
-                            .text_color(c(tint.color(p))),
-                    )
+                    .when(active, |el| el.font_weight(FontWeight::MEDIUM))
+                    .when(!active, |el| el.hover(|style| style.text_color(c(p.ink))))
+                    .when(tab.pass_through, |el| el.italic())
                     .child(div().when(tab.deleted, |el| el.line_through()).child(name))
                     .when(tab.dirty, |el| {
                         el.child(
@@ -1178,19 +1235,21 @@ impl EditorTabs {
                                 }
                             })),
                     )
-                    // Drawn over the tab rather than as a border, so the active tab is as tall as the rest.
+                    // Drawn over the tab rather than as a border, so the active tab is as tall as the
+                    // rest. It takes the color of the route line that reaches the file in the tree.
                     .when(active, |el| {
                         el.child(
                             div()
                                 .absolute()
-                                .left_0()
-                                .right_0()
+                                .left(z(12., cx))
+                                .right(z(12., cx))
                                 .bottom_0()
                                 .h(z(2., cx))
-                                .bg(c(p.accent)),
+                                .rounded(z(1., cx))
+                                .bg(c(station)),
                         )
                     })
-                    .when(tab.leaf_through, |el| {
+                    .when(tab.pass_through, |el| {
                         el.child(folded_corner(z(9., cx), c(p.fold)))
                     })
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -1302,8 +1361,8 @@ fn list_unit(text: &Rope, row: usize) -> String {
     markdown::indent_unit(lines.iter().map(String::as_str))
 }
 
-/// leaf's one button look (the design's Open folder button): `side` fill, `line` border, radius 6.
-fn leaf_button(id: &'static str, label: &'static str, cx: &App) -> Button {
+/// subwy's one button look (the design's Open folder button): `side` fill, `line` border, radius 6.
+fn subwy_button(id: &'static str, label: &'static str, cx: &App) -> Button {
     let p = theme::colors(cx);
     Button::new(id)
         .label(label)
@@ -1313,7 +1372,7 @@ fn leaf_button(id: &'static str, label: &'static str, cx: &App) -> Button {
         .text_color(c(p.ink))
 }
 
-/// The leaf-through mark: the tab's top right corner folded over, a right triangle of `size`.
+/// The pass-through mark: the tab's top right corner folded over, a right triangle of `size`.
 fn folded_corner(size: Pixels, color: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| {},
@@ -1378,6 +1437,7 @@ impl Render for EditorTabs {
             .flex()
             .flex_col()
             .child(self.render_tab_bar(cx))
+            .children(self.active_tab().map(|tab| self.render_route_path(tab, cx)))
             .child(
                 div()
                     .flex_1()
@@ -1486,10 +1546,10 @@ fn check_disk(path: &Path, known: FileStamp, dirty: bool) -> DiskState {
 mod tests {
     // Not `super::*`: GPUI's glob export includes a `test` macro that would replace the built-in one.
     use super::{DiskState, Saved, active_after_close, check_disk, write_file};
-    use leaf_project::fs::{self, LineEnding};
+    use subwy_project::fs::{self, LineEnding};
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("leaf-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("subwy-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

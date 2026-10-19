@@ -3,52 +3,68 @@
 use std::path::PathBuf;
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::paths;
+use subwy_project::paths;
 
 use crate::{
     keymap::OpenFolder,
     theme::{self, c, z},
 };
 
-/// The leaf mark (assets/brand/mark.svg): a leaf whose veins are the tree's bent guides.
-/// Below 24 px the side veins would blur, so only the midrib stays (mark-small.svg).
-pub fn leaf_mark(size: Pixels, fill: Hsla, stroke: Hsla) -> impl IntoElement {
+/// The subwy mark (assets/brand/mark.svg): the first three lines of the tree's route crossing at
+/// two interchanges, with the station at the end of the first line.
+pub fn subwy_mark(side: Pixels, cx: &App) -> impl IntoElement {
+    let p = theme::colors(cx);
+    let [first, second, third] = [p.route[0], p.route[1], p.route[2]].map(c);
+    let (ink, paper) = (c(p.ink), c(p.paper));
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let unit = bounds.size.width / 100.;
-            let small = bounds.size.width < px(24.);
-            let width = unit * if small { 7. } else { 4.5 };
             let at = |x: f32, y: f32| point(bounds.origin.x + unit * x, bounds.origin.y + unit * y);
-            let blade = |mut path: PathBuilder| {
-                path.move_to(at(50., 14.));
-                path.cubic_bezier_to(at(64., 74.), at(72., 30.), at(78., 54.));
-                path.cubic_bezier_to(at(36., 74.), at(58., 82.), at(42., 82.));
-                path.cubic_bezier_to(at(50., 14.), at(22., 54.), at(28., 30.));
-                path.close();
-                path
+            let dot = |window: &mut Window, (x, y): (f32, f32), r: f32, color: Hsla| {
+                let r = unit * r;
+                let center = at(x, y);
+                let corner = point(center.x - r, center.y - r);
+                window.paint_quad(
+                    fill(Bounds::new(corner, size(r * 2., r * 2.)), color).corner_radii(r),
+                );
             };
-            let mut veins = PathBuilder::stroke(width);
-            veins.move_to(at(50., if small { 30. } else { 26. }));
-            veins.line_to(at(50., 88.));
-            if !small {
-                for (y, x) in [(38., 59.), (52., 41.), (64., 58.)] {
-                    veins.move_to(at(50., y));
-                    veins.line_to(at(x, y));
+            // Each line, with round ends like the SVG's.
+            let lines: [(&[(f32, f32)], Hsla); 3] = [
+                (&[(50., 12.), (50., 88.)], second),
+                (&[(18., 76.), (82., 76.)], third),
+                (&[(12., 62.), (36., 62.), (62., 36.), (82., 36.)], first),
+            ];
+            for (points, color) in lines {
+                let mut path = PathBuilder::stroke(unit * 8.);
+                path.move_to(at(points[0].0, points[0].1));
+                for &(x, y) in &points[1..] {
+                    path.line_to(at(x, y));
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+                for &end in [points[0], points[points.len() - 1]].iter() {
+                    dot(window, end, 4., color);
                 }
             }
-            if let Ok(path) = blade(PathBuilder::fill()).build() {
-                window.paint_path(path, fill);
+            for ring in [(50., 48.), (50., 76.)] {
+                let r = unit * 7.;
+                let center = at(ring.0, ring.1);
+                window.paint_quad(quad(
+                    Bounds::new(point(center.x - r, center.y - r), size(r * 2., r * 2.)),
+                    r,
+                    paper,
+                    unit * 3.,
+                    ink,
+                    BorderStyle::Solid,
+                ));
             }
-            for path in [blade(PathBuilder::stroke(width)).build(), veins.build()]
-                .into_iter()
-                .flatten()
-            {
-                window.paint_path(path, stroke);
-            }
+            dot(window, (82., 36.), 10.5, first.opacity(0.22));
+            dot(window, (82., 36.), 6.5, first);
         },
     )
-    .size(size)
+    .size(side)
 }
 
 /// The recent folders: name, then where it lives; Up/Down choose, Enter or a click opens.
@@ -165,12 +181,12 @@ pub fn render(
                 .flex_col()
                 .items_center()
                 .gap(z(12., cx))
-                .child(leaf_mark(z(48., cx), c(p.sel_bg), c(p.accent)))
+                .child(subwy_mark(z(48., cx), cx))
                 .child(
                     div()
                         .text_size(z(22., cx))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("leaf"),
+                        .child("subwy"),
                 )
                 .child(
                     div()

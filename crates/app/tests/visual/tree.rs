@@ -200,7 +200,7 @@ fn header(check: &mut Check) {
     let fixture = fixture();
     let window = open_light(check, fixture.path());
     check.shot(window, "tree-8-header");
-    // The buttons sit right of "Project", 22 wide, ending 6 in from the tree's right edge.
+    // The buttons sit right of "PROJECT", 22 wide, ending 6 in from the tree's right edge.
     let y = 38. + 17.;
     let button = |from_right: f32| 6. + 300. - 6. - 11. - 24. * from_right;
     click(check, window, button(3.), y);

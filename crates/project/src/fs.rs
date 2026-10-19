@@ -46,8 +46,8 @@ pub fn list_dir(root: &Path, dir: &Path) -> io::Result<Vec<DirEntry>> {
     for entry in std::fs::read_dir(&abs_dir)? {
         let entry = entry?;
         let name = crate::paths::display_name(&entry.file_name());
-        // `.leaf-save-*.tmp` lives only for the instant of an atomic save.
-        if name == ".git" || name == ".DS_Store" || name.starts_with(".leaf-save-") {
+        // `.subwy-save-*.tmp` lives only for the instant of an atomic save.
+        if name == ".git" || name == ".DS_Store" || name.starts_with(".subwy-save-") {
             continue;
         }
         let path = entry.path();
@@ -155,7 +155,7 @@ pub enum LineEnding {
     Crlf,
 }
 
-/// When a file was last seen on disk, to notice changes made outside leaf.
+/// When a file was last seen on disk, to notice changes made outside subwy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileStamp {
     pub modified: SystemTime,
@@ -318,7 +318,7 @@ fn create_temp_beside(target: &Path) -> io::Result<(PathBuf, std::fs::File)> {
     let dir = target.parent().unwrap_or(Path::new(""));
     loop {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let temp = dir.join(format!(".leaf-save-{}-{n}.tmp", std::process::id()));
+        let temp = dir.join(format!(".subwy-save-{}-{n}.tmp", std::process::id()));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -361,7 +361,7 @@ pub enum NameError {
     Empty,
     /// `.` or `..`, an empty folder name (`a//b`), or a path that starts at `/`.
     Invalid,
-    /// Something by that name is already there; leaf never replaces it.
+    /// Something by that name is already there; subwy never replaces it.
     Exists,
     /// A folder on the way is a file.
     NotAFolder(String),

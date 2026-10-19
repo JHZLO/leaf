@@ -1,0 +1,22 @@
+#!/bin/zsh
+# Opens folders and files in subwy: starts it, or hands them to the subwy already running.
+#   subwy [folder or file ...]
+# The app is $SUBWY_APP, else the subwy.app scripts/bundle.sh builds in this repository, else the
+# subwy.app macOS knows (for example one copied to /Applications).
+set -euo pipefail
+
+# :A follows a symlink on PATH back to this repository.
+app=${SUBWY_APP:-${0:A:h:h}/target/bundle/subwy.app}
+[[ -n ${SUBWY_APP:-} || -d $app ]] || app=subwy
+
+paths=()
+for arg in "$@"; do
+  if [[ ! -e $arg ]]; then
+    echo "subwy: no such file or folder: $arg" >&2
+    exit 1
+  fi
+  # Absolute, so what reaches subwy never depends on how open reads a relative path.
+  paths+=("${arg:a}")
+done
+
+exec open -a "$app" "${paths[@]}"

@@ -1,12 +1,13 @@
 <img src="assets/brand/mark.svg" width="72" alt="">
 
-# leaf
+# subwy
 
 A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust on
 [GPUI](https://github.com/zed-industries/zed) (through [GPUI Kit](https://github.com/longbridge/gpui-component)).
 
-Open a folder, walk its tree with the arrow keys, copy paths in one keystroke, and read Markdown
-and code with syntax highlighting, with your shell a keystroke away. An editor, not an IDE: no
+Open a folder, walk its tree with the arrow keys (the way to the selection is drawn as a metro
+line, and glides as you move), copy paths in one keystroke, and read Markdown and code with
+syntax highlighting, with your shell a keystroke away. An editor, not an IDE: no
 language servers or plugins.
 
 Early days: macOS only, built from source.
@@ -17,11 +18,11 @@ You need macOS and Rust (the toolchain in `rust-toolchain.toml` is picked up aut
 The Xcode Command Line Tools are enough; shaders compile when the app starts.
 
 ```bash
-cargo run --release -p leaf -- ~/notes          # open a folder
-cargo run --release -p leaf -- ~/notes/todo.md  # open a file in its folder
+cargo run --release -p subwy -- ~/notes          # open a folder
+cargo run --release -p subwy -- ~/notes/todo.md  # open a file in its folder
 ```
 
-Without an argument leaf reopens the windows you left, each with its folders, tree and tabs.
+Without an argument subwy reopens the windows you left, each with its folders, tree and tabs.
 
 A window can hold several folders, as IntelliJ holds several modules: add one with `Cmd+O`
 (This Window) or the tree's more menu (Add Folder…), and take it out with Remove from Window on its
@@ -32,35 +33,35 @@ row's right-click menu. Copied relative paths are relative to the file's own fol
 There is no download yet; build the app from source:
 
 ```bash
-scripts/bundle.sh         # target/bundle/leaf.app
-scripts/bundle.sh --dmg   # also target/bundle/leaf-<version>.dmg
+scripts/bundle.sh         # target/bundle/subwy.app
+scripts/bundle.sh --dmg   # also target/bundle/subwy-<version>.dmg
 ```
 
-Copy `target/bundle/leaf.app` to `/Applications` (or open the DMG and drag it there).
-Then Finder's Open With and `open -a leaf <folder or file>` open in leaf, a new window per folder.
+Copy `target/bundle/subwy.app` to `/Applications` (or open the DMG and drag it there).
+Then Finder's Open With and `open -a subwy <folder or file>` open in subwy, a new window per folder.
 The app is signed ad hoc, which is enough on the Mac that built it; giving it to others would need
 a Developer ID signature and notarization.
 
-### The `leaf` command
+### The `subwy` command
 
-`scripts/leaf` opens folders and files from a terminal, starting leaf or handing them to the one
+`scripts/subwy` opens folders and files from a terminal, starting subwy or handing them to the one
 already running:
 
 ```bash
-leaf ~/notes            # the folder, in the window that has it or a new one
-leaf ~/notes/todo.md    # the file, in its folder's window
-leaf                    # start leaf, or bring it forward
+subwy ~/notes            # the folder, in the window that has it or a new one
+subwy ~/notes/todo.md    # the file, in its folder's window
+subwy                    # start subwy, or bring it forward
 ```
 
 To have it on your `PATH`, link it into a folder that is on `PATH`, from the repository root:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -s "$PWD/scripts/leaf" ~/.local/bin/leaf
+ln -s "$PWD/scripts/subwy" ~/.local/bin/subwy
 ```
 
-It opens `target/bundle/leaf.app` from this repository when that exists, else the `leaf.app`
-macOS knows about (the one in `/Applications`). Set `LEAF_APP=/path/to/leaf.app` to choose another.
+It opens `target/bundle/subwy.app` from this repository when that exists, else the `subwy.app`
+macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.app` to choose another.
 
 ## Keys
 
@@ -84,7 +85,7 @@ The keys follow IntelliJ IDEA.
 | Tree | `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown` | Move |
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
 | | `Enter` | Open the file (or toggle the folder) |
-| | `Space` | Leaf through: show the file and stay in the tree |
+| | `Space` | Pass through: show the file and stay in the tree |
 | | type letters | Jump to a name |
 | | `Cmd+N`, `Shift+F6`, `Cmd+Backspace` | New file or folder (pick in the popup, `F` / `D`), rename, move to the Trash |
 | | `Esc` | Back to the editor |
@@ -95,8 +96,8 @@ The keys follow IntelliJ IDEA.
 
 ## Settings
 
-leaf writes `~/Library/Application Support/leaf/settings.json` with the defaults on first run.
-Changes apply the next time leaf starts.
+subwy writes `~/Library/Application Support/subwy/settings.json` with the defaults on first run.
+Changes apply the next time subwy starts.
 
 ```json
 {
@@ -111,7 +112,7 @@ Changes apply the next time leaf starts.
 }
 ```
 
-`soft_wrap` is `markdown`, `all` or `none`. Entries in `keymap` are added after leaf's own keys, so they win.
+`soft_wrap` is `markdown`, `all` or `none`. Entries in `keymap` are added after subwy's own keys, so they win.
 A file that does not parse is ignored (with the reason in the status bar) and the defaults are used.
 
 ## Development

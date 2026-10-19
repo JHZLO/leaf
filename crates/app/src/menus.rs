@@ -18,7 +18,7 @@ fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
 
 pub fn init(cx: &mut App) {
     cx.set_menus(vec![
-        menu("leaf", vec![MenuItem::action("Quit leaf", Quit)]),
+        menu("subwy", vec![MenuItem::action("Quit subwy", Quit)]),
         menu(
             "File",
             vec![

@@ -1,4 +1,4 @@
-//! The user's settings file. Read once at startup; leaf writes a file of defaults the first time so it is
+//! The user's settings file. Read once at startup; subwy writes a file of defaults the first time so it is
 //! easy to find and edit. A file that does not parse is reported and the defaults are used instead.
 
 use std::{
@@ -19,7 +19,7 @@ pub struct Settings {
     pub soft_wrap: SoftWrap,
     /// The key hint line under the tree.
     pub key_hints: bool,
-    /// Extra key bindings, applied after leaf's own (so they win).
+    /// Extra key bindings, applied after subwy's own (so they win).
     pub keymap: Vec<KeyOverride>,
 }
 
@@ -67,15 +67,15 @@ impl Settings {
     }
 }
 
-/// `~/Library/Application Support/leaf/settings.json`, or `LEAF_SETTINGS_PATH` for tests.
+/// `~/Library/Application Support/subwy/settings.json`, or `SUBWY_SETTINGS_PATH` for tests.
 pub fn default_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LEAF_SETTINGS_PATH") {
+    if let Some(path) = std::env::var_os("SUBWY_SETTINGS_PATH") {
         return PathBuf::from(path);
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Library/Application Support/leaf/settings.json")
+    home.join("Library/Application Support/subwy/settings.json")
 }
 
 /// The settings, or the defaults and why the file could not be used. A missing file is not an error.
@@ -114,6 +114,24 @@ pub fn write_default_if_missing(path: &Path) -> io::Result<()> {
     }
     let json = serde_json::to_vec_pretty(&Settings::default()).map_err(io::Error::other)?;
     std::fs::write(path, json)
+}
+
+/// Copies the settings and session subwy kept while it was called leaf into its own folder, the
+/// first time it starts, so the rename keeps the keys, windows and recent folders. leaf's files stay.
+pub fn adopt_leaf_files(home: &Path) -> io::Result<()> {
+    let support = home.join("Library/Application Support");
+    let (old, new) = (support.join("leaf"), support.join("subwy"));
+    if new.exists() || !old.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&new)?;
+    for name in ["settings.json", "session.json"] {
+        let from = old.join(name);
+        if from.is_file() {
+            std::fs::copy(&from, new.join(name))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -172,11 +190,40 @@ mod tests {
     #[test]
     fn the_default_file_is_written_once_and_reads_back() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("leaf/settings.json");
+        let path = dir.path().join("subwy/settings.json");
         write_default_if_missing(&path).unwrap();
         std::fs::write(&path, r#"{ "tab_size": 8 }"#).unwrap();
         write_default_if_missing(&path).unwrap();
         assert_eq!(load(&path).0.tab_size, 8);
+    }
+
+    #[test]
+    fn leaf_files_come_over_once() {
+        let home = tempfile::tempdir().unwrap();
+        let support = home.path().join("Library/Application Support");
+        std::fs::create_dir_all(support.join("leaf")).unwrap();
+        std::fs::write(support.join("leaf/settings.json"), r#"{ "tab_size": 8 }"#).unwrap();
+        std::fs::write(support.join("leaf/session.json"), "{}").unwrap();
+        adopt_leaf_files(home.path()).unwrap();
+        assert_eq!(load(&support.join("subwy/settings.json")).0.tab_size, 8);
+        assert!(support.join("subwy/session.json").is_file());
+        assert!(support.join("leaf/settings.json").is_file());
+        // Once subwy has its own folder, leaf's files are left alone.
+        std::fs::write(support.join("leaf/settings.json"), r#"{ "tab_size": 2 }"#).unwrap();
+        adopt_leaf_files(home.path()).unwrap();
+        assert_eq!(load(&support.join("subwy/settings.json")).0.tab_size, 8);
+    }
+
+    #[test]
+    fn nothing_to_bring_over_without_leaf() {
+        let home = tempfile::tempdir().unwrap();
+        adopt_leaf_files(home.path()).unwrap();
+        assert!(
+            !home
+                .path()
+                .join("Library/Application Support/subwy")
+                .exists()
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! leaf: a light, keyboard-first text and Markdown editor for macOS.
+//! subwy: a light, keyboard-first text and Markdown editor for macOS.
 //! A library so the offscreen UI tests in tests/ can build the same window; `main.rs` only calls [`run`].
 
 // The theme JSON in theme.rs is one large `json!` literal.
@@ -24,7 +24,7 @@ pub mod workspace;
 use std::path::PathBuf;
 
 use gpui_kit::{App, Global};
-use leaf_project::settings::{self, Settings};
+use subwy_project::settings::{self, Settings};
 
 /// The user's settings, read once at startup, and why the file could not be used, if it could not.
 pub struct UserSettings {
@@ -38,7 +38,7 @@ pub fn settings(cx: &App) -> &Settings {
     &cx.global::<UserSettings>().settings
 }
 
-/// Registers leaf's settings, theme, keys and the shared session; what both the app and the UI
+/// Registers subwy's settings, theme, keys and the shared session; what both the app and the UI
 /// tests start from.
 pub fn init(cx: &mut App) {
     let (settings, error) = settings::load(&settings::default_path());
@@ -47,7 +47,7 @@ pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
     theme::init(cx);
     keymap::init(cx);
-    // Bound after leaf's own keys so the user's win.
+    // Bound after subwy's own keys so the user's win.
     if let Some(problem) = keymap::bind_overrides(&overrides, cx) {
         let state = cx.global_mut::<UserSettings>();
         state.error.get_or_insert(problem);
@@ -57,13 +57,21 @@ pub fn init(cx: &mut App) {
 
 /// Runs the app. `arg` is a folder to open, or a file to open inside its folder.
 pub fn run(arg: Option<PathBuf>) {
+    // The first start after the rename from leaf brings leaf's settings and session along.
+    let scripted = std::env::var_os("SUBWY_SETTINGS_PATH").is_some()
+        || std::env::var_os("SUBWY_SESSION_PATH").is_some();
+    if let Some(home) = std::env::var_os("HOME").filter(|_| !scripted)
+        && let Err(err) = settings::adopt_leaf_files(std::path::Path::new(&home))
+    {
+        eprintln!("subwy: leaf's settings not brought over: {err}");
+    }
     // A file of defaults the first time, so the settings are easy to find and edit.
     if let Err(err) = settings::write_default_if_missing(&settings::default_path()) {
-        eprintln!("leaf: no settings file written: {err}");
+        eprintln!("subwy: no settings file written: {err}");
     }
     // The default icon set, which gpui-kit's icons (chevrons, dialog buttons) draw from.
-    let app = gpui_kit::application().with_assets(icons::LeafAssets);
-    // Paths from Finder's Open With, `open -a leaf` and the leaf command. When they start leaf,
+    let app = gpui_kit::application().with_assets(icons::SubwyAssets);
+    // Paths from Finder's Open With, `open -a subwy` and the subwy command. When they start subwy,
     // macOS hands them over before launching finishes, so they wait in the channel until then.
     let (opened, requests) = smol::channel::unbounded::<Vec<String>>();
     app.on_open_urls(move |urls| {
@@ -96,15 +104,15 @@ pub fn run(arg: Option<PathBuf>) {
             }
         })
         .detach();
-        // Screenshot runs set LEAF_BACKGROUND so the window never takes the keyboard from someone typing.
-        if std::env::var_os("LEAF_BACKGROUND").is_none() {
+        // Screenshot runs set SUBWY_BACKGROUND so the window never takes the keyboard from someone typing.
+        if std::env::var_os("SUBWY_BACKGROUND").is_none() {
             cx.activate(true);
         }
     });
 }
 
 /// The path in a `file://` URL as macOS sends it (percent-encoded, folders end in a slash).
-/// Other URLs are not leaf's.
+/// Other URLs are not subwy's.
 fn path_from_url(url: &str) -> Option<PathBuf> {
     let rest = url.strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
@@ -159,7 +167,7 @@ mod tests {
     #[test]
     fn other_urls_are_not_paths() {
         assert_eq!(path_from_url("https://example.com/a.md"), None);
-        assert_eq!(path_from_url("leaf://open"), None);
+        assert_eq!(path_from_url("subwy://open"), None);
         assert_eq!(path_from_url("file://server/share"), None);
         assert_eq!(path_from_url("file:///bad%2"), None);
         assert_eq!(path_from_url("file:///bad%zz"), None);

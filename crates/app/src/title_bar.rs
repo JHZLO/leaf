@@ -4,7 +4,7 @@ use gpui_kit::*;
 
 use crate::theme::{self, c, size, z};
 
-/// Where macOS draws the traffic lights inside leaf's own title bar.
+/// Where macOS draws the traffic lights inside subwy's own title bar.
 pub fn traffic_lights() -> Point<Pixels> {
     point(px(14.), px(13.))
 }
@@ -31,7 +31,7 @@ pub fn render(folder: Option<&str>, file: Option<&str>, cx: &App) -> impl IntoEl
             div()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(c(p.ink))
-                .child(folder.unwrap_or("leaf").to_string()),
+                .child(folder.unwrap_or("subwy").to_string()),
         )
         .children(file.map(|file| div().ml_2().text_color(c(p.sub)).child(file.to_string())))
 }

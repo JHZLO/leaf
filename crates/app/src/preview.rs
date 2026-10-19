@@ -32,7 +32,7 @@ const SIDE: f32 = 24.;
 /// Frames a reveal may take to report its line before the preview stops waiting for it.
 const REVEAL_FRAMES: u8 = 2;
 /// The custom block of an image on disk, see [`local_image`].
-const LOCAL_IMAGE: &str = "leaf-local-image";
+const LOCAL_IMAGE: &str = "subwy-local-image";
 
 pub struct Preview {
     state: Entity<TextViewState>,
