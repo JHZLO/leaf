@@ -23,6 +23,36 @@ pub struct Row {
     pub loops: bool,
 }
 
+/// The row a new item named `name` takes in the open folder `dir`: before the first of `dir`'s
+/// items that sorts after it, else after everything `dir` shows. A name with a `/` makes a
+/// folder first, and sorts as that folder.
+pub fn landing(rows: &[Row], dir: &Path, name: &str, kind: EntryKind) -> usize {
+    let Some(at) = rows.iter().position(|r| r.path == dir) else {
+        return 0;
+    };
+    let (first, folder) = match name.split_once('/') {
+        Some((first, _)) => (first, true),
+        None => (name, kind == EntryKind::Dir),
+    };
+    let entry = |name: &str, kind| DirEntry {
+        name: name.to_string(),
+        kind,
+        ignored: false,
+        loops: false,
+    };
+    let new = entry(first, if folder { EntryKind::Dir } else { kind });
+    let depth = rows[at].depth + 1;
+    let mut line = at + 1;
+    while line < rows.len() && rows[line].depth >= depth {
+        let row = &rows[line];
+        if row.depth == depth && compare_entries(&new, &entry(&row.name, row.kind)).is_lt() {
+            return line;
+        }
+        line += 1;
+    }
+    line
+}
+
 /// The rows on the way to `path`, outermost first and ending at `path`'s own row: the folder at
 /// each depth that holds it, so the row at index `d` is at depth `d`. Empty when `path` has no row.
 pub fn route(rows: &[Row], path: &Path) -> Vec<usize> {
@@ -512,6 +542,30 @@ mod tests {
         {
             assert_eq!(rows[i].depth, depth);
         }
+    }
+
+    #[test]
+    fn a_new_item_lands_where_it_will_sort() {
+        // docs holds guide/ (open: a.md, b.md) and readme.md.
+        let rows = sample().rows();
+        let at = |name: &str, kind| {
+            let line = landing(&rows, Path::new("docs"), name, kind);
+            rows.get(line).map(|r| r.path.to_str().unwrap().to_string())
+        };
+        assert_eq!(
+            at("notes.md", EntryKind::File),
+            Some("docs/readme.md".into())
+        );
+        assert_eq!(at("z.md", EntryKind::File), Some("src".into()));
+        // Folders come first, so a new folder goes before guide's files are passed.
+        assert_eq!(at("api", EntryKind::Dir), Some("docs/guide".into()));
+        assert_eq!(at("zz", EntryKind::Dir), Some("docs/readme.md".into()));
+        // A name with a slash makes a folder, and sorts as one: drafts/ before guide/.
+        assert_eq!(
+            at("drafts/idea.md", EntryKind::File),
+            Some("docs/guide".into())
+        );
+        assert_eq!(landing(&rows, Path::new("gone"), "a", EntryKind::File), 0);
     }
 
     #[test]

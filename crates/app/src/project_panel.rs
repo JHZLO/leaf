@@ -49,9 +49,8 @@ const ICON_SIZE: f32 = 14.;
 const MIN_WIDTH: f32 = 180.;
 const MAX_WIDTH: f32 = 480.;
 
-/// Speed search field spacing at 100% zoom.
-const SEARCH_MARGIN: f32 = 8.;
-const SEARCH_PADDING: f32 = 6.;
+/// The rename input's inner padding at 100% zoom.
+const EDIT_PADDING: f32 = 6.;
 /// The name input sits inside a row, one point clear of its top and bottom.
 const EDIT_HEIGHT: f32 = size::TREE_ROW - 2.;
 
@@ -160,6 +159,8 @@ struct Edit {
     error: Option<SharedString>,
     /// The disk work for the last Enter has not come back yet.
     busy: bool,
+    /// What the input holds, for the line that shows where a new item will land.
+    typed: String,
     _subscription: Subscription,
 }
 
@@ -189,10 +190,14 @@ fn name_selection(name: &str, kind: EntryKind) -> Range<usize> {
     }
 }
 
-/// One line of the list: a tree row, or the input for a new item right under its folder.
+/// One line of the list: a tree row, or where a new item will land while its name is typed.
 enum Item {
     Row(Row),
-    New { depth: usize },
+    New {
+        depth: usize,
+        name: String,
+        folder: bool,
+    },
 }
 
 /// The input line and its refusal, as the list draws them.
@@ -801,6 +806,7 @@ impl ProjectPanel {
                 InputEvent::PressEnter { .. } => this.commit_edit(window, cx),
                 InputEvent::Change => {
                     if let Some(edit) = &mut this.edit {
+                        edit.typed = edit.input.read(cx).value().to_string();
                         edit.error = None;
                         cx.notify();
                     }
@@ -814,6 +820,7 @@ impl ProjectPanel {
             input,
             error: None,
             busy: false,
+            typed: text.to_string(),
             _subscription: subscription,
         });
         cx.notify();
@@ -929,22 +936,31 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// The list lines: the rows, with the new-item input under its folder.
+    /// The list lines: the rows, with the line where a new item will land among its folder's
+    /// items, named as typed so far.
     fn items(&self, rows: Vec<Row>) -> Vec<Item> {
-        let mut items: Vec<Item> = rows.into_iter().map(Item::Row).collect();
-        let Some(EditTarget::New { dir, .. }) = self.edit.as_ref().map(|e| &e.target) else {
-            return items;
+        let new = self.edit.as_ref().and_then(|edit| match &edit.target {
+            EditTarget::New { dir, kind } => Some((dir, *kind, &edit.typed)),
+            EditTarget::Rename { .. } => None,
+        });
+        let Some((dir, kind, typed)) = new else {
+            return rows.into_iter().map(Item::Row).collect();
         };
-        // Right under the folder's row, one level in.
-        let (at, depth) = items
+        let at = tree::landing(&rows, dir, typed, kind);
+        let depth = rows
             .iter()
-            .enumerate()
-            .find_map(|(i, item)| match item {
-                Item::Row(row) if &row.path == dir => Some((i + 1, row.depth + 1)),
-                _ => None,
-            })
-            .unwrap_or((0, 0));
-        items.insert(at, Item::New { depth });
+            .find(|r| &r.path == dir)
+            .map_or(0, |r| r.depth + 1);
+        let folder = kind == EntryKind::Dir || typed.ends_with('/');
+        let mut items: Vec<Item> = rows.into_iter().map(Item::Row).collect();
+        items.insert(
+            at.min(items.len()),
+            Item::New {
+                depth,
+                name: typed.clone(),
+                folder,
+            },
+        );
         items
     }
 
@@ -1056,7 +1072,8 @@ impl ProjectPanel {
     /// focus. On a row `on_route`, the chevron gives way to the route's ring and the icon and name
     /// stand out from the rest of the tree, whose icons stay faint. The backgrounds and the route
     /// itself are painted under the rows (see `route`).
-    /// The part of the name a speed search for `query` matched is set in semibold.
+    /// The part of the name a speed search for `query` matched is marked, and a row that neither
+    /// matches nor lies on the route steps back.
     /// With `rename`, the name is an input. A folder of the window (and the window's own node) is
     /// set in medium and shows `hint`, where it is on disk.
     fn render_row(
@@ -1077,12 +1094,15 @@ impl ProjectPanel {
             None if row.ignored => (p.ignored, p.sub),
             None => (p.ink, p.sub),
         };
+        let mark = c(p.accent).opacity(0.3);
+        let dim = !on_route && query.is_some_and(|q| nav::name_match(&row.name, q).is_none());
         Self::row_frame(
             ElementId::Name(row.path.to_string_lossy().to_string().into()),
             row.depth,
             cx,
         )
         .text_color(c(ink))
+        .when(dim, |el| el.opacity(0.38))
         .when(on_route && !folder_row, |el| {
             el.font_weight(FontWeight::MEDIUM)
         })
@@ -1124,7 +1144,7 @@ impl ProjectPanel {
                     div()
                         .flex_none()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(name_label(&row.name, query)),
+                        .child(name_label(&row.name, query, mark)),
                 )
                 .child(
                     // A long path loses its start, keeping the folders nearest the name.
@@ -1136,15 +1156,167 @@ impl ProjectPanel {
                         .text_color(c(p.sub))
                         .children(hint.cloned()),
                 ),
-            None => el.child(name_label(&row.name, query)),
+            None => el.child(name_label(&row.name, query, mark)),
         })
     }
 
-    /// The line where a new item's name is typed, under its folder.
-    fn render_new(depth: usize, edit: &EditView, cx: &App) -> Stateful<Div> {
+    /// Where a new item will land while its name is typed on the command line: its icon and the
+    /// name so far, in the color of the line that will reach it (red once a name is refused).
+    fn render_new(
+        depth: usize,
+        name: &str,
+        folder: bool,
+        refused: bool,
+        cx: &App,
+    ) -> Stateful<Div> {
+        let p = theme::colors(cx);
+        let color = if refused {
+            p.ansi[1]
+        } else {
+            p.route[depth.saturating_sub(1) % p.route.len()]
+        };
+        let icon = if folder {
+            icons::folder_icon(false)
+        } else {
+            icons::file_icon(name)
+        };
+        let shown = match (name.is_empty(), folder) {
+            (false, _) => name.to_string(),
+            (true, true) => "folder name".to_string(),
+            (true, false) => "name".to_string(),
+        };
         Self::row_frame("tree-new", depth, cx)
             .child(div().size(z(CHEVRON_SLOT, cx)).flex_none())
-            .child(edit_field(edit, cx))
+            .child(
+                Icon::new(icon)
+                    .size(z(ICON_SIZE, cx))
+                    .flex_none()
+                    .text_color(c(color)),
+            )
+            .child(
+                div()
+                    .italic()
+                    .text_color(c(if refused { p.ansi[1] } else { p.sub }))
+                    .child(shown),
+            )
+    }
+
+    /// One of the speed search's buttons; `step` moves among the matches, none closes the search.
+    fn search_button(
+        id: &'static str,
+        icon: IconName,
+        tooltip: &'static str,
+        step: Option<SearchStep>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        // On mouse down, so the tree's own mouse down does not close the search first.
+        header_button(id, icon, tooltip, cx).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.focus_handle.focus(window, cx);
+                match step {
+                    Some(step) => this.search_step(step, cx),
+                    None => {
+                        this.search = None;
+                        cx.notify();
+                    }
+                }
+            }),
+        )
+    }
+
+    /// The speed search in place of the header (Cmd+F, or typing in the tree): what is looked for,
+    /// which match is selected out of how many, and buttons to step and close. The tree takes the
+    /// keys, so the caret is drawn here.
+    fn render_search(
+        &self,
+        query: &str,
+        found: Option<(usize, Option<usize>)>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let p = theme::colors(cx);
+        let count = match found {
+            None => String::new(),
+            Some((0, _)) => "No match".to_string(),
+            Some((total, Some(at))) => format!("{} / {total}", at + 1),
+            Some((total, None)) => total.to_string(),
+        };
+        let missed = matches!(found, Some((0, _)));
+        let caret = div().flex_none().w(px(1.5)).h(z(14., cx)).bg(c(p.accent));
+        div()
+            .h(z(size::TREE_HEAD, cx))
+            .flex_none()
+            .flex()
+            .items_center()
+            .px(z(6., cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h(z(26., cx))
+                    .flex()
+                    .items_center()
+                    .gap(z(6., cx))
+                    .pl(z(8., cx))
+                    .pr(z(2., cx))
+                    .rounded(z(7., cx))
+                    .bg(c(p.cur))
+                    .border_1()
+                    .border_color(c(if missed { p.ansi[1] } else { p.line }))
+                    .child(
+                        Icon::new(IconName::Search)
+                            .size(z(13., cx))
+                            .flex_none()
+                            .text_color(c(p.sub)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .map(|el| {
+                                if query.is_empty() {
+                                    el.child(caret)
+                                        .child(div().text_color(c(p.ignored)).child("Find a name"))
+                                } else {
+                                    el.child(div().text_color(c(p.ink)).child(query.to_string()))
+                                        .child(caret)
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(z(11.5, cx))
+                            .text_color(c(p.sub))
+                            .child(count),
+                    )
+                    .child(Self::search_button(
+                        "search-prev",
+                        IconName::ChevronUp,
+                        "Previous match",
+                        Some(SearchStep::Prev),
+                        cx,
+                    ))
+                    .child(Self::search_button(
+                        "search-next",
+                        IconName::ChevronDown,
+                        "Next match",
+                        Some(SearchStep::Next),
+                        cx,
+                    ))
+                    .child(Self::search_button(
+                        "search-close",
+                        IconName::X,
+                        "Close",
+                        None,
+                        cx,
+                    )),
+            )
     }
 }
 
@@ -1340,13 +1512,13 @@ fn folder_popup(
 }
 
 /// A row's name, its speed search match in semibold (medium barely shows at 13 px).
-fn name_label(name: &str, query: Option<&str>) -> StyledText {
+fn name_label(name: &str, query: Option<&str>, mark: Hsla) -> StyledText {
     let text = StyledText::new(name.to_string());
     match query.and_then(|query| nav::name_match(name, query)) {
         Some(range) => text.with_highlights([(
             range,
             HighlightStyle {
-                font_weight: Some(FontWeight::SEMIBOLD),
+                background_color: Some(mark),
                 ..Default::default()
             },
         )]),
@@ -1381,7 +1553,7 @@ fn edit_field(edit: &EditView, cx: &App) -> impl IntoElement {
                     Input::new(&edit.input)
                         .appearance(false)
                         .size_full()
-                        .px(z(SEARCH_PADDING, cx))
+                        .px(z(EDIT_PADDING, cx))
                         .py_0()
                         .text_size(z(size::UI_TEXT, cx))
                         .line_height(z(EDIT_HEIGHT - 2., cx)),
@@ -1398,32 +1570,75 @@ fn edit_field(edit: &EditView, cx: &App) -> impl IntoElement {
         })
 }
 
-/// The line at the top of the list that shows what a speed search is looking for.
-fn search_field(query: String, cx: &App) -> impl IntoElement {
+/// Cmd+N's name line, in place of the key hints: what is made, in which folder, the name, and why
+/// the last Enter was refused.
+fn command_line(edit: &EditView, kind: EntryKind, place: &str, cx: &App) -> impl IntoElement {
     let p = theme::colors(cx);
     div()
+        .h(z(size::KEY_HINTS, cx))
         .flex_none()
-        .px(z(SEARCH_MARGIN, cx))
-        .pb(z(SEARCH_MARGIN, cx))
+        .flex()
+        .items_center()
+        .gap(z(8., cx))
+        .px(z(HINT_PADDING, cx))
+        .border_t_1()
+        .border_color(c(p.line))
+        .bg(c(p.cur))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_size(z(12.5, cx))
+        // A click inside stays there; the tree's own mouse-down would end the naming.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .h(z(size::TREE_ROW, cx))
+                .flex_none()
+                .h(z(18., cx))
+                .px(z(6., cx))
                 .flex()
                 .items_center()
-                .px(z(SEARCH_PADDING, cx))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .rounded(z(4., cx))
-                .border_1()
-                .border_color(c(p.line))
-                .bg(c(p.paper))
-                .map(|el| {
-                    if query.is_empty() {
-                        el.text_color(c(p.ignored)).child("Type a name")
-                    } else {
-                        el.text_color(c(p.ink)).child(query)
-                    }
+                .rounded(z(5., cx))
+                .bg(c(p.tree_sel))
+                .text_size(z(10.5, cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(p.sub))
+                .child(if kind == EntryKind::Dir {
+                    "NEW FOLDER"
+                } else {
+                    "NEW FILE"
                 }),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(c(p.ignored))
+                .child(format!("{place}/")),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(z(EDIT_HEIGHT, cx))
+                .text_color(c(p.ink))
+                .child(
+                    Input::new(&edit.input)
+                        .appearance(false)
+                        .size_full()
+                        .px_0()
+                        .py_0()
+                        .text_size(z(12.5, cx))
+                        .line_height(z(EDIT_HEIGHT - 2., cx)),
+                ),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(z(11.5, cx))
+                .text_color(c(if edit.error.is_some() {
+                    p.ansi[1]
+                } else {
+                    p.ignored
+                }))
+                .child(edit.error.clone().unwrap_or_else(|| "↩".into())),
         )
 }
 
@@ -1462,10 +1677,34 @@ impl Render for ProjectPanel {
         let stops = selected
             .as_deref()
             .map_or_else(Vec::new, |s| tree::route(&rows, s));
-        let hovered = self
-            .hovered
+        // While a new item is named, the dashed way runs to where it will land instead.
+        let new_dir = match self.edit.as_ref().map(|e| &e.target) {
+            Some(EditTarget::New { dir, .. }) => Some(dir.clone()),
+            _ => None,
+        };
+        let hovered = match &new_dir {
+            Some(dir) => tree::route(&rows, dir),
+            None => self
+                .hovered
+                .as_deref()
+                .map_or_else(Vec::new, |h| tree::route(&rows, h)),
+        };
+        // How many shown rows the speed search matches, and which of them is selected.
+        let found = self
+            .search
             .as_deref()
-            .map_or_else(Vec::new, |h| tree::route(&rows, h));
+            .filter(|q| !q.is_empty())
+            .map(|query| {
+                let hits: Vec<&PathBuf> = rows
+                    .iter()
+                    .filter(|r| nav::name_match(&r.name, query).is_some())
+                    .map(|r| &r.path)
+                    .collect();
+                let at = selected
+                    .as_ref()
+                    .and_then(|s| hits.iter().position(|h| *h == s));
+                (hits.len(), at)
+            });
         let items = self.items(rows);
         let count = items.len();
         let new_at = items
@@ -1473,7 +1712,10 @@ impl Render for ProjectPanel {
             .position(|item| matches!(item, Item::New { .. }));
         let to_line = |row: usize| row + usize::from(new_at.is_some_and(|at| row >= at));
         let stops: Vec<usize> = stops.into_iter().map(to_line).collect();
-        let hovered: Vec<usize> = hovered.into_iter().map(to_line).collect();
+        let mut hovered: Vec<usize> = hovered.into_iter().map(to_line).collect();
+        if let (Some(_), Some(at)) = (&new_dir, new_at) {
+            hovered.push(at);
+        }
         let now = Instant::now();
         self.route
             .aim(selected.as_deref(), &stops, now, !cx.reduce_motion());
@@ -1510,8 +1752,28 @@ impl Render for ProjectPanel {
         };
         let hints = match &self.edit {
             Some(edit) => edit.target.hints(),
+            None if self.search.is_some() => SEARCH_HINTS,
             None => hint_keys(selected_row.as_ref()),
         };
+        let command = self.edit.as_ref().and_then(|edit| match &edit.target {
+            EditTarget::New { dir, kind } => {
+                let place = if dir.as_os_str().is_empty() {
+                    self.folders
+                        .first()
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    dir.display().to_string()
+                };
+                let view = EditView {
+                    input: edit.input.clone(),
+                    error: edit.error.clone(),
+                };
+                Some((view, *kind, place))
+            }
+            EditTarget::Rename { .. } => None,
+        });
         div()
             .key_context(PROJECT_PANEL)
             .track_focus(&self.focus_handle)
@@ -1595,9 +1857,9 @@ impl Render for ProjectPanel {
             .overflow_hidden()
             .bg(c(p.paper))
             .text_size(z(size::UI_TEXT, cx))
-            .child(self.render_header(cx))
-            .when_some(self.search.clone(), |el, query| {
-                el.child(search_field(query, cx))
+            .child(match self.search.clone() {
+                Some(query) => self.render_search(&query, found, cx).into_any_element(),
+                None => self.render_header(cx).into_any_element(),
             })
             .child(
                 // The route and the row backgrounds are painted under the list's rows.
@@ -1609,7 +1871,11 @@ impl Render for ProjectPanel {
                     .child(
                         uniform_list("project-tree", count, {
                             let selected = selected.clone();
-                            let query = self.search.clone();
+                            // Matched names are marked and the rest step back, once something matches.
+                            let query = self
+                                .search
+                                .clone()
+                                .filter(|_| found.is_some_and(|(total, _)| total > 0));
                             let edit = self.edit.as_ref().map(|edit| EditView {
                                 input: edit.input.clone(),
                                 error: edit.error.clone(),
@@ -1726,9 +1992,21 @@ impl Render for ProjectPanel {
                                             })
                                             .into_any_element()
                                         }
-                                        (Item::New { depth }, Some(edit)) => {
-                                            Self::render_new(*depth, edit, cx).into_any_element()
-                                        }
+                                        (
+                                            Item::New {
+                                                depth,
+                                                name,
+                                                folder,
+                                            },
+                                            Some(edit),
+                                        ) => Self::render_new(
+                                            *depth,
+                                            name,
+                                            *folder,
+                                            edit.error.is_some(),
+                                            cx,
+                                        )
+                                        .into_any_element(),
                                         (Item::New { .. }, None) => div().into_any_element(),
                                     })
                                     .collect()
@@ -1738,10 +2016,17 @@ impl Render for ProjectPanel {
                         .size_full(),
                     ),
             )
-            .when(self.show_key_hints, |el| el.child(key_hints(hints, cx)))
+            // Naming a new item takes the hint line for its command line, even with hints hidden.
+            .map(|el| match command {
+                Some((edit, kind, place)) => el.child(command_line(&edit, kind, &place, cx)),
+                None => el.when(self.show_key_hints, |el| el.child(key_hints(hints, cx))),
+            })
             .child(crate::workspace::island_corners(cx))
     }
 }
+
+/// The keys the hint line offers while a speed search is on.
+const SEARCH_HINTS: &[(&str, &str)] = &[("↑↓", "Matches"), ("↩", "Open"), ("Esc", "Close")];
 
 /// The keys the hint line offers for the selection, as (key, label).
 fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] {
