@@ -151,8 +151,9 @@ impl ProjectTree {
     }
 
     /// Closes a folder; a selection inside it moves up to the folder.
+    /// Closes `dir` and every folder inside it, so opening it again shows only what it holds.
     pub fn collapse(&mut self, dir: &Path) {
-        self.expanded.remove(dir);
+        self.expanded.retain(|open| !open.starts_with(dir));
         if self
             .selected
             .as_deref()
@@ -458,13 +459,29 @@ mod tests {
         tree.collapse(Path::new(""));
         assert_eq!(selected(&tree), Some(""));
         assert_eq!(summary(&tree), [("".to_string(), false)]);
-        // Its listing stays, so opening it again reads nothing.
+        // Its listing stays, so opening it again reads nothing; the folders inside stay closed.
         assert!(!tree.expand(Path::new("")));
-        assert_eq!(tree.rows().len(), 8);
-        // A session keeps the folders inside it, not the open folder itself.
+        assert_eq!(tree.rows().len(), 4);
+        assert_eq!(tree.expanded_dirs().count(), 0);
+    }
+
+    #[test]
+    fn collapsing_a_folder_closes_the_folders_inside() {
+        let mut tree = sample();
+        tree.collapse(Path::new("docs"));
+        assert!(!tree.expand(Path::new("docs")));
         assert_eq!(
-            tree.expanded_dirs().collect::<HashSet<_>>(),
-            HashSet::from([Path::new("docs"), Path::new("docs/guide")])
+            summary(&tree),
+            [
+                ("", true),
+                ("docs", true),
+                ("docs/guide", false),
+                ("docs/readme.md", false),
+                ("src", false),
+                ("top.md", false)
+            ]
+            .map(|(p, e)| (p.to_string(), e))
+            .to_vec()
         );
     }
 
