@@ -1035,7 +1035,7 @@ impl EditorTabs {
             .flex_none()
             .flex()
             .overflow_x_hidden()
-            .bg(c(p.side))
+            .bg(c(p.paper))
             .border_b_1()
             .border_color(c(p.line))
             .text_size(z(12.5, cx))
@@ -1118,8 +1118,9 @@ impl Render for EditorTabs {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(z(theme::editor_text(cx), cx));
                 if tab.is_markdown() {
-                    // The paper sheet: a reading-width page on the desk, keeping 20 px of desk on each
-                    // side when the pane is narrower than the page.
+                    // The paper sheet: a reading-width page, keeping 20 px on each side when the pane is
+                    // narrower than the page. The sides are one tone under the paper; the desk itself is
+                    // the window around the islands.
                     body.key_context(MARKDOWN)
                         .on_action(cx.listener(Self::newline))
                         .on_action(cx.listener(Self::indent_item))
@@ -1133,7 +1134,7 @@ impl Render for EditorTabs {
                         .flex()
                         .justify_center()
                         .px(z(20., cx))
-                        .bg(c(p.desk))
+                        .bg(c(p.side))
                         .child(
                             div()
                                 .w_full()

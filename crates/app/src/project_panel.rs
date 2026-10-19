@@ -38,7 +38,6 @@ const CHEVRON_SIZE: f32 = 10.;
 /// Tree width limits at 100% zoom, and the strip at its right edge that drags it.
 const MIN_WIDTH: f32 = 180.;
 const MAX_WIDTH: f32 = 480.;
-const RESIZE_HANDLE: f32 = 4.;
 
 /// Speed search field spacing at 100% zoom.
 const SEARCH_MARGIN: f32 = 8.;
@@ -162,8 +161,8 @@ struct EditView {
     error: Option<SharedString>,
 }
 
-/// What the right edge drags; the panel resizes as it moves.
-struct ResizeDrag;
+/// What the gap right of the tree drags; the panel resizes as it moves.
+pub struct ResizeDrag;
 
 impl EventEmitter<PanelEvent> for ProjectPanel {}
 impl EventEmitter<FileEvent> for ProjectPanel {}
@@ -1014,8 +1013,11 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &Trash, window, cx| this.trash(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
-                    let width = (event.event.position.x - event.bounds.left()).as_f32();
-                    this.width = clamp_width(width / theme::zoom(cx));
+                    // The pointer holds the middle of the gap, half a gap past the tree's edge.
+                    let zoom = theme::zoom(cx);
+                    let width = (event.event.position.x - event.bounds.left()).as_f32() / zoom
+                        - size::ISLAND_GAP / 2.;
+                    this.width = clamp_width(width);
                     cx.notify();
                 }),
             )
@@ -1026,9 +1028,10 @@ impl Render for ProjectPanel {
             .flex_none()
             .flex()
             .flex_col()
-            .bg(c(p.side))
-            .border_r_1()
-            .border_color(c(p.line))
+            // An island, like the editor and the terminal: paper with rounded corners on the desk.
+            .rounded(z(size::ISLAND_RADIUS, cx))
+            .overflow_hidden()
+            .bg(c(p.paper))
             .text_size(z(size::UI_TEXT, cx))
             .when_some(self.search.clone(), |el, query| {
                 el.child(search_field(query, cx))
@@ -1096,19 +1099,7 @@ impl Render for ProjectPanel {
                 .flex_1(),
             )
             .when(self.show_key_hints, |el| el.child(key_hints(hints, cx)))
-            .child(
-                // Inside the edge: the editor paints after the tree and would cover a handle outside it.
-                div()
-                    .id("tree-resize")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .right_0()
-                    .w(z(RESIZE_HANDLE, cx))
-                    .occlude()
-                    .cursor_col_resize()
-                    .on_drag(ResizeDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
-            )
+            .child(crate::workspace::island_corners(cx))
     }
 }
 

@@ -18,7 +18,7 @@ use crate::{
         OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder,
         TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
-    project_panel::{FileEvent, PanelEvent, ProjectPanel},
+    project_panel::{FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     terminal_panel::{TerminalEvent, TerminalPanel},
@@ -37,6 +37,9 @@ enum OverlayView {
     Finder(Entity<Finder>),
     Search(Entity<SearchPanel>),
 }
+
+/// What the gap above the terminal drags; the terminal resizes as it moves.
+struct TerminalResize;
 
 /// The shell under the editor, kept while hidden so its session survives Alt+F12.
 struct Terminal {
@@ -57,6 +60,8 @@ pub struct Workspace {
     tabs: Entity<EditorTabs>,
     tree_visible: bool,
     terminal: Option<Terminal>,
+    /// The terminal's height at 100% zoom, dragged from the gap above it.
+    terminal_height: f32,
     overlay: Option<Overlay>,
     copied: Option<Copied>,
     copy_seq: u64,
@@ -344,6 +349,7 @@ impl Workspace {
             tabs,
             tree_visible: true,
             terminal: None,
+            terminal_height: size::TERMINAL_HEIGHT,
             overlay: None,
             copied: None,
             copy_seq: 0,
@@ -619,6 +625,12 @@ impl Workspace {
     /// The open folder, if any.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
         self.panel.as_ref().map(|p| p.read(cx).root().to_path_buf())
+    }
+
+    /// The tree's width and the terminal's height at 100% zoom; for the UI checks.
+    pub fn island_sizes(&self, cx: &App) -> (Option<f32>, f32) {
+        let tree = self.panel.as_ref().map(|p| p.read(cx).width);
+        (tree, self.terminal_height)
     }
 
     /// The lines the terminal shows, when it is open; for the UI checks.
@@ -952,6 +964,56 @@ impl Workspace {
     }
 }
 
+/// A rounded sheet of paper on the desk: the tree, the editor and the terminal are each one.
+/// Its last child must be [`island_corners`].
+fn island(cx: &App) -> Div {
+    let p = theme::colors(cx);
+    div()
+        .relative()
+        .rounded(z(size::ISLAND_RADIUS, cx))
+        .overflow_hidden()
+        .bg(c(p.paper))
+}
+
+/// Paints the desk over an island's corners, outside the rounding. GPUI clips what an island holds
+/// to a rectangle, so a selected row, the editor or the terminal would otherwise square the corners.
+pub(crate) fn island_corners(cx: &App) -> impl IntoElement {
+    let desk = c(theme::colors(cx).desk);
+    let radius = z(size::ISLAND_RADIUS, cx);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // A quarter circle as one cubic curve: its control points sit this far from the corner.
+            let pull = radius * (1. - 0.5523);
+            let (left, right, top, bottom) =
+                (bounds.left(), bounds.right(), bounds.top(), bounds.bottom());
+            for (x, y, dx, dy) in [
+                (left, top, 1., 1.),
+                (right, top, -1., 1.),
+                (left, bottom, 1., -1.),
+                (right, bottom, -1., -1.),
+            ] {
+                let mut corner = PathBuilder::fill();
+                corner.move_to(point(x, y));
+                corner.line_to(point(x + radius * dx, y));
+                corner.cubic_bezier_to(
+                    point(x, y + radius * dy),
+                    point(x + pull * dx, y),
+                    point(x, y + pull * dy),
+                );
+                corner.close();
+                if let Ok(path) = corner.build() {
+                    window.paint_path(path, desk);
+                }
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
@@ -1048,52 +1110,107 @@ impl Render for Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(c(p.paper))
+            .bg(c(p.desk))
             .text_color(c(p.ink))
             .child(title_bar::render(folder.as_deref(), file.as_deref(), cx))
             .child(
+                // The islands on the desk (IntelliJ's layout): the tree and the editor side by side,
+                // the terminal across the bottom. The gaps between them resize them.
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .when_some(
-                        self.panel.clone().filter(|_| self.tree_visible),
-                        |el, panel| el.child(panel),
-                    )
-                    .map(|el| match self.panel {
-                        Some(_) => el.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .child(div().flex_1().min_h_0().flex().child(self.tabs.clone()))
-                                .when_some(
-                                    self.terminal.as_ref().filter(|t| t.visible),
-                                    |el, terminal| {
-                                        el.child(
-                                            div()
-                                                .flex_none()
-                                                .h(z(size::TERMINAL_HEIGHT, cx))
-                                                .border_t_1()
-                                                .border_color(c(p.line))
-                                                .child(terminal.view.clone()),
-                                        )
-                                    },
-                                ),
-                        ),
-                        None => {
-                            let this = cx.entity().downgrade();
-                            el.child(empty_state::render(
-                                &self.recent_shown(cx),
-                                self.recent_selected,
-                                move |index, _, cx| {
-                                    let _ = this.update(cx, |this, cx| this.open_recent(index, cx));
+                    .flex_col()
+                    .px(z(size::ISLAND_GAP, cx))
+                    .pb(z(size::ISLAND_GAP, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .when_some(
+                                self.panel.clone().filter(|_| self.tree_visible),
+                                |el, panel| {
+                                    el.child(panel).child(
+                                        div()
+                                            .id("tree-resize")
+                                            .flex_none()
+                                            .w(z(size::ISLAND_GAP, cx))
+                                            .h_full()
+                                            .cursor_col_resize()
+                                            .on_drag(ResizeDrag, |_, _, _, cx| {
+                                                cx.new(|_| EmptyView)
+                                            }),
+                                    )
                                 },
-                                cx,
-                            ))
-                        }
-                    }),
+                            )
+                            .child(
+                                island(cx)
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .map(|el| match self.panel {
+                                        Some(_) => el.child(self.tabs.clone()),
+                                        None => {
+                                            let this = cx.entity().downgrade();
+                                            el.child(empty_state::render(
+                                                &self.recent_shown(cx),
+                                                self.recent_selected,
+                                                move |index, _, cx| {
+                                                    let _ = this.update(cx, |this, cx| {
+                                                        this.open_recent(index, cx)
+                                                    });
+                                                },
+                                                cx,
+                                            ))
+                                        }
+                                    })
+                                    .child(island_corners(cx)),
+                            ),
+                    )
+                    .when_some(
+                        self.terminal.as_ref().filter(|t| t.visible),
+                        |el, terminal| {
+                            el.child(
+                                div()
+                                    .id("terminal-resize")
+                                    .flex_none()
+                                    .h(z(size::ISLAND_GAP, cx))
+                                    .w_full()
+                                    .cursor_row_resize()
+                                    .on_drag(TerminalResize, |_, _, _, cx| cx.new(|_| EmptyView)),
+                            )
+                            .child(
+                                island(cx)
+                                    .flex_none()
+                                    .h(z(self.terminal_height, cx))
+                                    .on_drag_move(cx.listener(
+                                        |this,
+                                         event: &DragMoveEvent<TerminalResize>,
+                                         window,
+                                         cx| {
+                                            let zoom = theme::zoom(cx);
+                                            // The pointer holds the middle of the gap above.
+                                            let height = (event.bounds.bottom()
+                                                - event.event.position.y)
+                                                .as_f32()
+                                                / zoom
+                                                - size::ISLAND_GAP / 2.;
+                                            // Leave the editor room; the window may be short.
+                                            let most = (window.viewport_size().height.as_f32()
+                                                / zoom
+                                                - 200.)
+                                                .max(size::TERMINAL_MIN);
+                                            this.terminal_height =
+                                                height.clamp(size::TERMINAL_MIN, most);
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(terminal.view.clone())
+                                    .child(island_corners(cx)),
+                            )
+                        },
+                    ),
             )
             .child(status_bar::render(
                 Status {

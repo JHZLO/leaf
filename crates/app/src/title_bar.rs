@@ -18,9 +18,8 @@ pub fn render(folder: Option<&str>, file: Option<&str>, cx: &App) -> impl IntoEl
         .flex()
         .items_center()
         .justify_center()
-        .bg(c(p.side))
-        .border_b_1()
-        .border_color(c(p.line))
+        // On the desk with the islands below it, so no line.
+        .bg(c(p.desk))
         .window_control_area(WindowControlArea::Drag)
         .on_click(|event, window, _| {
             if event.click_count() == 2 {

@@ -110,9 +110,8 @@ pub fn render(status: Status<'_>, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl_2()
         .pr_3()
-        .bg(c(p.side))
-        .border_t_1()
-        .border_color(c(p.line))
+        // On the desk under the islands, like the title bar.
+        .bg(c(p.desk))
         .text_size(z(12., cx))
         .text_color(c(p.sub))
         .child(

@@ -131,7 +131,11 @@ pub mod size {
     pub const SHEET: f32 = 720.;
     pub const UI_TEXT: f32 = 13.;
     pub const EDITOR_TEXT: f32 = 13.;
+    /// The space between the islands (tree, editor, terminal), which is also where they resize.
+    pub const ISLAND_GAP: f32 = 6.;
+    pub const ISLAND_RADIUS: f32 = 8.;
     pub const TERMINAL_HEIGHT: f32 = 260.;
+    pub const TERMINAL_MIN: f32 = 80.;
     /// The terminal's line height, as a multiple of its text size.
     pub const TERMINAL_LINE: f32 = 1.3;
 }
