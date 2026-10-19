@@ -1120,7 +1120,9 @@ impl Render for EditorTabs {
                 if tab.is_markdown() {
                     // The paper sheet: a reading-width page, keeping 20 px on each side when the pane is
                     // narrower than the page. The sides are one tone under the paper; the desk itself is
-                    // the window around the islands.
+                    // the window around the islands. Beside the preview the sheet fills its pane, so
+                    // the text and its rendering are only the divider apart.
+                    let beside_preview = self.preview.is_some();
                     body.key_context(MARKDOWN)
                         .on_action(cx.listener(Self::newline))
                         .on_action(cx.listener(Self::indent_item))
@@ -1133,17 +1135,19 @@ impl Render for EditorTabs {
                         }))
                         .flex()
                         .justify_center()
-                        .px(z(20., cx))
+                        .when(!beside_preview, |el| el.px(z(20., cx)))
                         .bg(c(p.side))
                         .child(
                             div()
                                 .w_full()
-                                .max_w(z(size::SHEET, cx))
+                                .when(!beside_preview, |el| {
+                                    el.max_w(z(size::SHEET, cx))
+                                        .border_x_1()
+                                        .border_color(c(p.line))
+                                })
                                 .h_full()
                                 .py(z(20., cx))
                                 .bg(c(p.paper))
-                                .border_x_1()
-                                .border_color(c(p.line))
                                 .child(editor),
                         )
                 } else {

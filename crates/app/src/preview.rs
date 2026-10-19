@@ -27,6 +27,8 @@ const DEBOUNCE: Duration = Duration::from_millis(150);
 const BODY: f32 = 14.;
 /// Top padding at 100% zoom; a line the preview follows lands this far below the top edge.
 const TOP: f32 = 26.;
+/// Padding at the sides. Kept small: the text it renders sits just across the divider.
+const SIDE: f32 = 24.;
 /// Frames a reveal may take to report its line before the preview stops waiting for it.
 const REVEAL_FRAMES: u8 = 2;
 /// The custom block of an image on disk, see [`local_image`].
@@ -520,7 +522,7 @@ impl Render for Preview {
             .bg(c(p.paper))
             .border_l_1()
             .border_color(c(p.line))
-            .px(z(40., cx))
+            .px(z(SIDE, cx))
             .py(z(TOP, cx))
             .text_color(c(p.ink))
             .map(|el| {
