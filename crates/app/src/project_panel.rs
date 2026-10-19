@@ -208,8 +208,13 @@ impl Focusable for ProjectPanel {
 
 impl ProjectPanel {
     pub fn new(folders: Folders, cx: &mut Context<Self>) -> Self {
+        let mut tree = ProjectTree::new(folders.first().to_path_buf());
+        // Several folders sit side by side at the top, as the user asked (not under a node).
+        if folders.several() {
+            tree.hide_root();
+        }
         let mut panel = Self {
-            tree: ProjectTree::new(folders.first().to_path_buf()),
+            tree,
             folders,
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),

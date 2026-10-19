@@ -1,4 +1,4 @@
-//! Several folders in one window (IntelliJ's modules): the tree shows them under the window's node,
+//! Several folders in one window (IntelliJ's modules): the tree shows them side by side at the top,
 //! a file in the second folder opens and copies relative to that folder, the session keeps the
 //! folders, and a folder row's menu takes its folder out again.
 
@@ -29,13 +29,13 @@ pub fn run(check: &mut Check) {
     check.update_workspace(window, move |w, window, cx| w.add_folder(added, window, cx));
     let rows = check.workspace(window, |w, cx| w.tree_rows(cx));
     check.expect_eq(
-        "the window's node holds both folders",
+        "both folders sit at the top, the first one first",
         (
             rows.first().cloned(),
-            rows.contains(&first_key),
             rows.contains(&second_key),
+            rows.contains(&PathBuf::new()),
         ),
-        (Some(PathBuf::new()), true, true),
+        (Some(first_key.clone()), true, false),
     );
     let open = check.workspace(window, |w, cx| w.tree_expanded(cx));
     check.expect_eq(

@@ -37,6 +37,9 @@ pub struct Guide {
 #[derive(Debug)]
 pub struct ProjectTree {
     root: PathBuf,
+    /// The open folder's own row is left out and what it holds starts at the top: a window of
+    /// several folders shows the folders side by side, not under a node of its own.
+    hide_root: bool,
     listings: HashMap<PathBuf, Vec<DirEntry>>,
     expanded: HashSet<PathBuf>,
     selected: Option<PathBuf>,
@@ -47,10 +50,16 @@ impl ProjectTree {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
+            hide_root: false,
             listings: HashMap::new(),
             expanded: HashSet::from([PathBuf::new()]),
             selected: None,
         }
+    }
+
+    /// Leaves the open folder's row out (see `hide_root`).
+    pub fn hide_root(&mut self) {
+        self.hide_root = true;
     }
 
     pub fn root(&self) -> &Path {
@@ -240,6 +249,12 @@ impl ProjectTree {
     /// first row, at depth 0.
     pub fn rows(&self) -> Vec<Row> {
         let root = Path::new("");
+        if self.hide_root {
+            let mut rows = Vec::new();
+            self.push_rows(root, 0, &mut rows);
+            self.mark_vein(&mut rows);
+            return rows;
+        }
         let expanded = self.expanded.contains(root);
         let name = self.root.file_name().map_or_else(
             || self.root.display().to_string(),
@@ -296,13 +311,15 @@ impl ProjectTree {
         let chain: Vec<PathBuf> = selected.ancestors().map(Path::to_path_buf).collect();
         let chain: Vec<PathBuf> = chain.into_iter().rev().collect();
         let index_of = |path: &Path, rows: &[Row]| rows.iter().position(|r| r.path == path);
-        for level in 0..chain.len().saturating_sub(1) {
+        for step in 0..chain.len().saturating_sub(1) {
             let (Some(from), Some(to)) = (
-                index_of(&chain[level], rows),
-                index_of(&chain[level + 1], rows),
+                index_of(&chain[step], rows),
+                index_of(&chain[step + 1], rows),
             ) else {
                 continue;
             };
+            // The guide under an ancestor sits at its depth.
+            let level = rows[from].depth;
             for row in rows.iter_mut().take(to + 1).skip(from + 1) {
                 if let Some(guide) = row.guides.get_mut(level) {
                     guide.vein = true;
@@ -608,6 +625,21 @@ mod tests {
         tree.expand(Path::new("docs"));
         tree.collapse(Path::new("docs"));
         assert_eq!(selected(&tree), Some("top.md"));
+    }
+
+    #[test]
+    fn a_hidden_root_puts_its_folders_at_the_top_with_their_veins() {
+        let mut tree = tree_with(&[("", vec![dir("a"), dir("b")]), ("a", vec![file("x.md")])]);
+        tree.hide_root();
+        tree.select(Some("a/x.md".into()));
+        let rows = tree.rows();
+        let summary: Vec<(&str, usize)> = rows
+            .iter()
+            .map(|r| (r.path.to_str().unwrap(), r.depth))
+            .collect();
+        assert_eq!(summary, [("a", 0), ("a/x.md", 1), ("b", 0)]);
+        assert_eq!(rows[1].guides, [TICK]);
+        assert_eq!(rows[2].guides, []);
     }
 
     #[test]
