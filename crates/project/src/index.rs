@@ -11,6 +11,8 @@ use std::{
 
 use ignore::{WalkBuilder, WalkState};
 
+use crate::folders::Folders;
+
 /// More files than this stops the walk: a folder that big is not one leaf is meant for, and
 /// the finder should still answer instead of reading the disk for minutes.
 pub const MAX_FILES: usize = 200_000;
@@ -26,6 +28,28 @@ pub struct FileIndex {
 /// Every file under `root` the finder offers: what the tree shows, minus the gitignored files.
 pub fn build(root: &Path) -> FileIndex {
     build_with_limit(root, MAX_FILES)
+}
+
+/// The finder's files across a window's folders: each folder's own, with its name in front when
+/// there are several (the paths the rest of leaf uses, see `folders`).
+pub fn build_folders(folders: &Folders) -> FileIndex {
+    if !folders.several() {
+        return build(folders.first());
+    }
+    let mut all = FileIndex::default();
+    for (root, key) in folders.roots().iter().zip(folders.keys()) {
+        let left = MAX_FILES.saturating_sub(all.paths.len());
+        if left == 0 {
+            all.capped = true;
+            break;
+        }
+        let index = build_with_limit(root, left);
+        all.capped |= index.capped;
+        all.paths
+            .extend(index.paths.into_iter().map(|path| format!("{key}/{path}")));
+    }
+    all.paths.sort_unstable_by(|a, b| compare_paths(a, b));
+    all
 }
 
 fn build_with_limit(root: &Path, limit: usize) -> FileIndex {
@@ -106,6 +130,22 @@ mod tests {
         let path = root.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, "").unwrap();
+    }
+
+    #[test]
+    fn several_folders_index_together_under_their_names() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        write(a.path(), "docs/x.md");
+        write(b.path(), "y.sql");
+        let folders = Folders::new(vec![a.path().to_path_buf(), b.path().to_path_buf()]);
+        let (ka, kb) = (&folders.keys()[0], &folders.keys()[1]);
+        let mut want = vec![format!("{ka}/docs/x.md"), format!("{kb}/y.sql")];
+        want.sort_by(|x, y| compare_paths(x, y));
+        assert_eq!(build_folders(&folders).paths, want);
+        // One folder indexes as before, without its name.
+        let one = Folders::single(a.path().to_path_buf());
+        assert_eq!(build_folders(&one).paths, ["docs/x.md"]);
     }
 
     #[test]

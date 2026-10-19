@@ -110,6 +110,28 @@ impl Check {
             .expect("window")
     }
 
+    /// Changes the window's workspace, as a menu or a dialog would (the checks never click a
+    /// native dialog).
+    pub fn update_workspace(
+        &mut self,
+        window: AnyWindowHandle,
+        change: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>),
+    ) {
+        self.cx
+            .update_window(window, |root, window, cx| {
+                let root = root.downcast::<gpui_kit::base::Root>().expect("root view");
+                let workspace = root
+                    .read(cx)
+                    .view()
+                    .clone()
+                    .downcast::<Workspace>()
+                    .expect("workspace");
+                workspace.update(cx, |workspace, cx| change(workspace, window, cx));
+            })
+            .expect("window");
+        self.cx.run_until_parked();
+    }
+
     pub fn expect_eq<T: PartialEq + std::fmt::Debug>(&mut self, what: &str, got: T, want: T) {
         if got == want {
             println!("ok   {what}");

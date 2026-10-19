@@ -7,7 +7,7 @@ use std::{
 };
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use leaf_project::{paths, session, watch};
+use leaf_project::{folders::Folders, paths, session, watch};
 
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
@@ -66,8 +66,8 @@ pub struct Workspace {
     overlay: Option<Overlay>,
     copied: Option<Copied>,
     copy_seq: u64,
-    /// Dropping it stops watching the old folder.
-    _watcher: Option<watch::Watcher>,
+    /// One per folder; dropping them stops watching.
+    _watchers: Vec<watch::Watcher>,
     /// Writes the session a moment after the last change.
     save_task: Task<()>,
     /// Which of the recent folders the empty window has selected.
@@ -183,13 +183,18 @@ fn open_in(
     let showing = live_windows(cx)
         .into_iter()
         .filter_map(|(handle, workspace)| {
-            let open = workspace.read(cx).root(cx)?;
-            let holds = match &file {
-                Some(file) => file.starts_with(&open),
-                None => open == root,
-            };
+            let folders = workspace.read(cx).folders(cx)?;
             // The deepest folder wins when one open folder sits inside another.
-            holds.then(|| (open.components().count(), handle, workspace))
+            let depth = folders
+                .roots()
+                .iter()
+                .filter(|open| match &file {
+                    Some(file) => file.starts_with(open),
+                    None => **open == root,
+                })
+                .map(|open| open.components().count())
+                .max()?;
+            Some((depth, handle, workspace))
         })
         .max_by_key(|(depth, ..)| *depth)
         .map(|(_, handle, workspace)| (handle, workspace, false));
@@ -316,7 +321,7 @@ fn write_session(cx: &App) {
 
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let tabs = cx.new(|cx| EditorTabs::new(PathBuf::new(), cx));
+        let tabs = cx.new(|cx| EditorTabs::new(Folders::single(PathBuf::new()), cx));
         let subscriptions = vec![
             cx.subscribe(&tabs, |_, _, _: &TabsChanged, cx| cx.notify()),
             cx.on_app_quit(|this, cx| {
@@ -354,7 +359,7 @@ impl Workspace {
             overlay: None,
             copied: None,
             copy_seq: 0,
-            _watcher: None,
+            _watchers: Vec::new(),
             save_task: Task::ready(()),
             recent_selected: 0,
             window: handle,
@@ -395,10 +400,92 @@ impl Workspace {
         }
     }
 
+    /// Opens `root` in this window, with the folders it had beside it when leaf last saved.
     pub fn set_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // A finder or search still open looks at the old folder.
+        let saved = session::load(&session::default_path())
+            .window(&root)
+            .cloned();
+        let mut roots = vec![root.clone()];
+        if let Some(saved) = &saved {
+            roots.extend(saved.folders.iter().filter(|f| f.is_dir()).cloned());
+        }
+        session::remember(&mut cx.default_global::<Windows>().recent, root);
+        self.show_folders(Folders::new(roots), saved, window, cx);
+    }
+
+    /// Adds a folder to this window (Cmd+O's This Window, the tree's Add Folder…).
+    pub fn add_folder(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(folders) = self.folders(cx) else {
+            return self.set_root(root, window, cx);
+        };
+        if folders.roots().contains(&root) {
+            return;
+        }
+        let mut roots = folders.roots().to_vec();
+        roots.push(root.clone());
+        session::remember(&mut cx.default_global::<Windows>().recent, root);
+        self.show_folders(Folders::new(roots), None, window, cx);
+    }
+
+    /// A folder row's Remove from Window. The last folder stays, and so does one with unsaved tabs.
+    fn remove_folder(&mut self, rel: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(folders) = self.folders(cx) else {
+            return;
+        };
+        let Some(abs) = folders.absolute(rel) else {
+            return;
+        };
+        if self.tabs.read(cx).unsaved_under(rel) {
+            self.tabs.update(cx, |tabs, cx| {
+                tabs.error = Some(format!(
+                    "Save or close the changed files in {} first",
+                    paths::relative(rel)
+                ));
+                cx.notify();
+            });
+            return;
+        }
+        let roots: Vec<PathBuf> = folders
+            .roots()
+            .iter()
+            .filter(|root| **root != abs)
+            .cloned()
+            .collect();
+        if !roots.is_empty() {
+            self.show_folders(Folders::new(roots), None, window, cx);
+        }
+    }
+
+    /// Shows `folders` in this window: a new tree, the tabs moved to the new paths (or opened from
+    /// `saved`), the folders watched. Changing the folders keeps what the tree had open.
+    fn show_folders(
+        &mut self,
+        folders: Folders,
+        saved: Option<session::WindowState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A finder or search still open looks at the old folders.
         self.overlay = None;
-        let panel = cx.new(|cx| ProjectPanel::new(root.clone(), cx));
+        // The old tree's open folders and selection, on disk, to carry over.
+        let before = self.panel.as_ref().map(|panel| {
+            let panel = panel.read(cx);
+            let old = panel.folders();
+            let on_disk = |rel: &Path| old.absolute(rel);
+            let mut expanded: Vec<PathBuf> = panel
+                .expanded_dirs()
+                .iter()
+                .filter_map(|rel| on_disk(rel))
+                .collect();
+            // A lone folder is always open; it stays open as one of several.
+            if !old.several() {
+                expanded.push(old.first().to_path_buf());
+            }
+            let selected = panel.selected().and_then(on_disk);
+            let had_focus = panel.focus_handle(cx).contains_focused(window, cx);
+            (expanded, selected, panel.width, had_focus)
+        });
+        let panel = cx.new(|cx| ProjectPanel::new(folders.clone(), cx));
         self._subscriptions.push(cx.subscribe_in(
             &panel,
             window,
@@ -422,6 +509,8 @@ impl Workspace {
                     this.focus_editor_area(window, cx);
                     cx.notify();
                 }
+                PanelEvent::AddFolder => this.ask_for_folder(window, cx),
+                PanelEvent::RemoveFolder(rel) => this.remove_folder(&rel.clone(), window, cx),
             },
         ));
         self._subscriptions.push(cx.subscribe_in(
@@ -438,32 +527,44 @@ impl Workspace {
                 }
             },
         ));
-        self.tabs = cx.new(|cx| EditorTabs::new(root.clone(), cx));
-        self._subscriptions
-            .push(cx.subscribe(&self.tabs, |this, _, _: &TabsChanged, cx| {
-                this.follow_active_file(cx);
-                this.schedule_save(cx);
-                cx.notify();
-            }));
+        if self.panel.is_some() {
+            self.tabs
+                .update(cx, |tabs, cx| tabs.set_folders(folders.clone(), window, cx));
+        } else {
+            self.tabs = cx.new(|cx| EditorTabs::new(folders.clone(), cx));
+            self._subscriptions
+                .push(cx.subscribe(&self.tabs, |this, _, _: &TabsChanged, cx| {
+                    this.follow_active_file(cx);
+                    this.schedule_save(cx);
+                    cx.notify();
+                }));
+        }
         self._subscriptions
             .push(cx.observe(&panel, |this, _, cx| this.schedule_save(cx)));
-        panel.read(cx).focus_handle(cx).focus(window, cx);
-        self.panel = Some(panel.clone());
-        session::remember(&mut cx.default_global::<Windows>().recent, root.clone());
-        self.recent_selected = 0;
-        if let Some(name) = root.file_name() {
-            // What the Window menu and the Dock list this window as.
-            window.set_window_title(&name.to_string_lossy());
+        if before.as_ref().is_none_or(|(.., had_focus)| *had_focus) {
+            panel.read(cx).focus_handle(cx).focus(window, cx);
         }
-        self.watch(&root, window, cx);
+        self.panel = Some(panel.clone());
+        self.followed = None;
+        self.recent_selected = 0;
+        // What the Window menu and the Dock list this window as.
+        window.set_window_title(folders.name());
+        self.watch(&folders, window, cx);
         // The terminal is open from the start (the user asked for it on by default); focus stays in
         // the tree.
         self.show_terminal(window, cx);
-        // A folder that had a window when leaf last saved comes back as it was left.
-        if let Some(saved) = session::load(&session::default_path())
-            .window(&root)
-            .cloned()
-        {
+        if let Some((expanded, selected, width, _)) = before {
+            let expanded: Vec<PathBuf> = expanded
+                .iter()
+                .filter_map(|abs| folders.relative(abs))
+                .collect();
+            let selected = selected.and_then(|abs| folders.relative(&abs));
+            panel.update(cx, |panel, cx| {
+                panel.restore(&expanded, selected, cx);
+                panel.width = width;
+            });
+        } else if let Some(saved) = saved {
+            // A folder that had a window when leaf last saved comes back as it was left.
             panel.update(cx, |panel, cx| {
                 panel.restore(&saved.expanded, saved.selected.clone(), cx);
                 panel.width = saved.tree_width.unwrap_or(panel.width);
@@ -479,26 +580,66 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens `file`, an absolute path inside the open folder, in a tab.
-    fn open_file(&mut self, file: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(root) = self.root(cx) else {
-            return;
-        };
-        if let Ok(rel) = file.strip_prefix(&root) {
-            let rel = rel.to_path_buf();
-            self.tabs
-                .update(cx, |tabs, cx| tabs.open(&rel, false, window, cx));
-        }
+    /// Asks for a folder to add to this window.
+    fn ask_for_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Add".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(root) = paths
+                .into_iter()
+                .next()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+            else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| this.add_folder(root, window, cx));
+        })
+        .detach();
     }
 
-    /// Watches the folder; each batch of outside changes refreshes the tree and the open files.
-    fn watch(&mut self, root: &Path, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens `file`, an absolute path inside one of the window's folders, in a tab.
+    fn open_file(&mut self, file: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rel) = self.folders(cx).and_then(|folders| folders.relative(file)) else {
+            return;
+        };
+        self.tabs
+            .update(cx, |tabs, cx| tabs.open(&rel, false, window, cx));
+    }
+
+    /// Watches the folders; each batch of outside changes refreshes the tree and the open files.
+    fn watch(&mut self, folders: &Folders, window: &mut Window, cx: &mut Context<Self>) {
         let (tx, rx) = smol::channel::unbounded::<watch::Changes>();
-        self._watcher = watch::Watcher::new(root, move |changes| {
-            let _ = tx.send_blocking(changes);
-        })
-        .map_err(|err| eprintln!("leaf: not watching {}: {err}", root.display()))
-        .ok();
+        self._watchers = folders
+            .roots()
+            .iter()
+            .zip(folders.keys())
+            .filter_map(|(root, key)| {
+                let tx = tx.clone();
+                // A watcher reports paths inside its folder; with several, they get its name.
+                let prefix = folders.several().then(|| PathBuf::from(key));
+                watch::Watcher::new(root, move |mut changes| {
+                    if let Some(prefix) = &prefix {
+                        for path in changes.dirs.iter_mut().chain(changes.files.iter_mut()) {
+                            *path = if path.as_os_str().is_empty() {
+                                prefix.clone()
+                            } else {
+                                prefix.join(&*path)
+                            };
+                        }
+                    }
+                    let _ = tx.send_blocking(changes);
+                })
+                .map_err(|err| eprintln!("leaf: not watching {}: {err}", root.display()))
+                .ok()
+            })
+            .collect();
         // Ends when the watcher (and with it the sender) is dropped for another folder.
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(changes) = rx.recv().await {
@@ -570,7 +711,9 @@ impl Workspace {
         let mut saved = session::WindowState::default();
         if let Some(panel) = &self.panel {
             let panel = panel.read(cx);
-            saved.root = Some(panel.root().to_path_buf());
+            let folders = panel.folders();
+            saved.root = Some(folders.first().to_path_buf());
+            saved.folders = folders.roots()[1..].to_vec();
             saved.expanded = panel.expanded_dirs();
             saved.selected = panel.selected().map(Path::to_path_buf);
             saved.tree_width = Some(panel.width);
@@ -621,6 +764,14 @@ impl Workspace {
         Some(panel.read(cx).expanded_dirs())
     }
 
+    /// The rows the tree shows; for the UI checks.
+    pub fn tree_rows(&self, cx: &App) -> Vec<PathBuf> {
+        self.panel
+            .as_ref()
+            .map(|panel| panel.read(cx).row_paths())
+            .unwrap_or_default()
+    }
+
     pub fn tree_selection(&self, cx: &App) -> Option<PathBuf> {
         self.panel
             .as_ref()?
@@ -645,9 +796,15 @@ impl Workspace {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
     }
 
-    /// The open folder, if any.
+    /// The window's first folder, if any.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
-        self.panel.as_ref().map(|p| p.read(cx).root().to_path_buf())
+        self.folders(cx)
+            .map(|folders| folders.first().to_path_buf())
+    }
+
+    /// The window's folders, if any.
+    pub fn folders(&self, cx: &App) -> Option<Folders> {
+        self.panel.as_ref().map(|p| p.read(cx).folders().clone())
     }
 
     /// The tree's width and the terminal's height at 100% zoom; for the UI checks.
@@ -754,8 +911,9 @@ impl Workspace {
             .is_some_and(|p| p.read(cx).focus_handle(cx).contains_focused(window, cx))
     }
 
-    /// Nothing open here is replaced, so there is nothing to ask before opening.
-    fn open_folder(&mut self, _: &OpenFolder, _: &mut Window, cx: &mut Context<Self>) {
+    /// Cmd+O. A window with folders asks, as IntelliJ does, whether the folder joins it or opens
+    /// in a new window; nothing open is replaced either way.
+    fn open_folder(&mut self, _: &OpenFolder, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -763,7 +921,8 @@ impl Workspace {
             prompt: Some("Open".into()),
         });
         let from = self.window;
-        cx.spawn(async move |_, cx| {
+        let has_folders = self.panel.is_some();
+        cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
                 return;
             };
@@ -773,7 +932,29 @@ impl Workspace {
             let Ok(root) = std::fs::canonicalize(root) else {
                 return;
             };
-            cx.update(|cx| open_folder_from(root, from, cx));
+            if has_folders {
+                let Ok(answer) = this.update_in(cx, |_, window, cx| {
+                    window.prompt(
+                        PromptLevel::Info,
+                        "Open the folder in this window or in a new one?",
+                        None,
+                        &["This Window", "New Window", "Cancel"],
+                        cx,
+                    )
+                }) else {
+                    return;
+                };
+                match answer.await {
+                    Ok(0) => {
+                        let _ = this
+                            .update_in(cx, |this, window, cx| this.add_folder(root, window, cx));
+                        return;
+                    }
+                    Ok(1) => {}
+                    _ => return,
+                }
+            }
+            let _ = cx.update(|_, cx| open_folder_from(root, from, cx));
         })
         .detach();
     }
@@ -804,10 +985,10 @@ impl Workspace {
             self.close_overlay(true, window, cx);
             return;
         }
-        let Some(root) = self.root(cx) else {
+        let Some(folders) = self.folders(cx) else {
             return;
         };
-        let view = cx.new(|cx| Finder::new(root, window, cx));
+        let view = cx.new(|cx| Finder::new(folders, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,
@@ -838,10 +1019,10 @@ impl Workspace {
             self.close_overlay(true, window, cx);
             return;
         }
-        let Some(root) = self.root(cx) else {
+        let Some(folders) = self.folders(cx) else {
             return;
         };
-        let view = cx.new(|cx| SearchPanel::new(root, window, cx));
+        let view = cx.new(|cx| SearchPanel::new(folders, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,
@@ -938,10 +1119,15 @@ impl Workspace {
     }
 
     fn copy_path(&mut self, _: &CopyPath, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(root), Some((rel, _))) = (self.root(cx), self.copy_source(window, cx)) else {
+        let (Some(folders), Some((rel, _))) = (self.folders(cx), self.copy_source(window, cx))
+        else {
             return;
         };
-        self.copy(paths::absolute(&root, &rel), "Copied path", cx);
+        // The window's node of several folders is on no disk: nothing to copy.
+        let Some((root, rest, _)) = folders.mount(&rel) else {
+            return;
+        };
+        self.copy(paths::absolute(root, &rest), "Copied path", cx);
     }
 
     fn copy_relative_path(
@@ -950,9 +1136,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((rel, lines)) = self.copy_source(window, cx) else {
+        let (Some(folders), Some((rel, lines))) = (self.folders(cx), self.copy_source(window, cx))
+        else {
             return;
         };
+        // Inside its own folder, as IntelliJ's Copy Path From Content Root.
+        let rel = folders.inside(&rel);
         match lines {
             Some((start, end)) => {
                 let label = if start == end {
@@ -973,12 +1162,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(root), Some((rel, _))) = (self.root(cx), self.copy_source(window, cx)) else {
+        let Some(path) = self
+            .folders(cx)
+            .zip(self.copy_source(window, cx))
+            .and_then(|(folders, (rel, _))| folders.absolute(&rel))
+        else {
             return;
         };
         if let Err(err) = std::process::Command::new("open")
             .arg("-R")
-            .arg(root.join(rel))
+            .arg(path)
             .spawn()
         {
             eprintln!("leaf: could not reveal in Finder: {err}");
@@ -1064,18 +1257,22 @@ impl Render for Workspace {
         let p = theme::colors(cx);
         let tabs = self.tabs.read(cx);
         let active = tabs.active_tab();
-        let folder = self
-            .root(cx)
-            .and_then(|r| r.file_name().map(|n| n.to_string_lossy().to_string()));
+        let folders = self.folders(cx);
+        let folder = folders.as_ref().map(|f| f.name().to_string());
+        // What the copy keys copy: a path inside its own folder.
+        let inside = |rel: &Path| match &folders {
+            Some(folders) => folders.inside(rel),
+            None => rel.to_path_buf(),
+        };
         let file = active.map(|t| paths::relative(&t.path));
         let stem = if self.tree_focused(window, cx) {
             self.panel
                 .as_ref()
-                .and_then(|p| p.read(cx).selected().map(paths::relative))
+                .and_then(|p| p.read(cx).selected().map(|s| paths::relative(&inside(s))))
         } else {
             active.map(|t| match tabs.active_lines(cx) {
-                Some((start, end)) => paths::with_lines(&t.path, start, end),
-                None => paths::relative(&t.path),
+                Some((start, end)) => paths::with_lines(&inside(&t.path), start, end),
+                None => paths::relative(&inside(&t.path)),
             })
         };
         let stem = match self.panel {

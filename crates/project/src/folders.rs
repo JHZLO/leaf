@@ -63,6 +63,11 @@ impl Folders {
         self.roots.len() > 1
     }
 
+    /// The name each folder goes by in paths, in order.
+    pub fn keys(&self) -> &[String] {
+        &self.keys
+    }
+
     /// The window's name: its first folder's.
     pub fn name(&self) -> &str {
         &self.keys[0]
@@ -80,6 +85,18 @@ impl Folders {
         };
         let index = self.keys.iter().position(|key| first == key.as_str())?;
         Some((&self.roots[index], parts.as_path().to_path_buf()))
+    }
+
+    /// The folder holding `rel`, the path inside it, and the prefix that names the folder in `rel`
+    /// (empty with one folder): what file operations take, and how to give their results back.
+    pub fn mount(&self, rel: &Path) -> Option<(&Path, PathBuf, PathBuf)> {
+        let (root, rest) = self.split(rel)?;
+        let prefix = if self.several() {
+            rel.components().take(1).collect()
+        } else {
+            PathBuf::new()
+        };
+        Some((root, rest, prefix))
     }
 
     /// `rel` on disk.
@@ -202,6 +219,18 @@ mod tests {
             folders.inside(Path::new("tripstore/docs/a.md")),
             PathBuf::from("docs/a.md")
         );
+    }
+
+    #[test]
+    fn mount_gives_the_folder_the_rest_and_the_prefix() {
+        let folders = two();
+        let (root, rest, prefix) = folders.mount(Path::new("tripstore/docs")).unwrap();
+        assert_eq!(root, Path::new("/Users/me/tripstore"));
+        assert_eq!(rest, PathBuf::from("docs"));
+        assert_eq!(prefix.join("a.md"), PathBuf::from("tripstore/a.md"));
+        let one = Folders::single(PathBuf::from("/n"));
+        let (_, rest, prefix) = one.mount(Path::new("docs")).unwrap();
+        assert_eq!((rest, prefix), (PathBuf::from("docs"), PathBuf::new()));
     }
 
     #[test]

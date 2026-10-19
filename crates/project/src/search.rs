@@ -7,7 +7,7 @@
 use std::{
     collections::BTreeMap,
     ops::Range,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed},
         mpsc,
@@ -17,7 +17,7 @@ use std::{
 
 use unicode_normalization::UnicodeNormalization;
 
-use crate::fs;
+use crate::{folders::Folders, fs};
 
 /// More matches than this stop the search: a list that long is for narrowing the query, not
 /// for reading, and stopping keeps a one-letter query quick on a large folder.
@@ -68,8 +68,29 @@ pub fn search(root: &Path, paths: &[String], query: &str, cancel: &AtomicBool) -
     search_with_limit(root, paths, query, cancel, MAX_MATCHES)
 }
 
+/// [`search`] over a window's folders: `paths` as the finder's index has them (see `folders`).
+pub fn search_folders(
+    folders: &Folders,
+    paths: &[String],
+    query: &str,
+    cancel: &AtomicBool,
+) -> Option<Results> {
+    let resolve = |path: &str| folders.absolute(Path::new(path)).unwrap_or_default();
+    search_inner(&resolve, paths, query, cancel, MAX_MATCHES)
+}
+
 fn search_with_limit(
     root: &Path,
+    paths: &[String],
+    query: &str,
+    cancel: &AtomicBool,
+    limit: usize,
+) -> Option<Results> {
+    search_inner(&|path: &str| root.join(path), paths, query, cancel, limit)
+}
+
+fn search_inner(
+    resolve: &(dyn Fn(&str) -> PathBuf + Sync),
     paths: &[String],
     query: &str,
     cancel: &AtomicBool,
@@ -95,7 +116,7 @@ fn search_with_limit(
                         break;
                     };
                     // The same rules as opening the file: what leaf cannot open, it does not search.
-                    let found = match fs::read_text(&root.join(path)) {
+                    let found = match fs::read_text(&resolve(path)) {
                         Ok(file) => search_text(&file.text, needle, limit),
                         Err(_) => Found::default(),
                     };

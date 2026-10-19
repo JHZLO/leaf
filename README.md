@@ -21,7 +21,11 @@ cargo run --release -p leaf -- ~/notes          # open a folder
 cargo run --release -p leaf -- ~/notes/todo.md  # open a file in its folder
 ```
 
-Without an argument leaf reopens the windows you left, each with its folder, tree and tabs.
+Without an argument leaf reopens the windows you left, each with its folders, tree and tabs.
+
+A window can hold several folders, as IntelliJ holds several modules: add one with `Cmd+O`
+(This Window) or the tree's more menu (Add Folder…), and take it out with Remove from Window on its
+row's right-click menu. Copied relative paths are relative to the file's own folder.
 
 ## Install
 
@@ -64,7 +68,7 @@ The keys follow IntelliJ IDEA.
 
 | Where | Keys | What |
 |---|---|---|
-| Anywhere | `Cmd+O` | Open a folder (in a new window when this one has a folder) |
+| Anywhere | `Cmd+O` | Open a folder (a window with folders asks: add it to this window, or open a new one) |
 | | `Cmd+Shift+N` | New window |
 | | `Cmd+1` | Focus the tree (again: hide it) |
 | | `Cmd+Shift+O` | Find a file by name |

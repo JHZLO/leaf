@@ -13,6 +13,7 @@ use std::{
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use leaf_project::{
+    folders::Folders,
     index::{self, FileIndex},
     search::{self, Results},
 };
@@ -58,7 +59,7 @@ enum Row {
 }
 
 pub struct SearchPanel {
-    root: PathBuf,
+    folders: Folders,
     input: Entity<InputState>,
     /// Empty until the walk of the folder, started when the panel opens, comes back.
     index: Option<Arc<FileIndex>>,
@@ -90,7 +91,7 @@ impl Drop for SearchPanel {
 }
 
 impl SearchPanel {
-    pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(folders: Folders, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in folder"));
         let subscriptions = vec![cx.subscribe_in(
             &input,
@@ -102,10 +103,10 @@ impl SearchPanel {
             },
         )];
         let load = cx.spawn({
-            let root = root.clone();
+            let folders = folders.clone();
             async move |this, cx| {
                 let index = cx
-                    .background_spawn(async move { index::build(&root) })
+                    .background_spawn(async move { index::build_folders(&folders) })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.index = Some(Arc::new(index));
@@ -114,7 +115,7 @@ impl SearchPanel {
             }
         });
         Self {
-            root,
+            folders,
             input,
             index: None,
             results: None,
@@ -143,14 +144,14 @@ impl SearchPanel {
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = cancel.clone();
-        let root = self.root.clone();
+        let folders = self.folders.clone();
         // Replacing the task drops a search still waiting out the pause.
         self.search = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DEBOUNCE).await;
             let found = cx
-                .background_spawn(
-                    async move { search::search(&root, &index.paths, &query, &cancel) },
-                )
+                .background_spawn(async move {
+                    search::search_folders(&folders, &index.paths, &query, &cancel)
+                })
                 .await;
             if let Some(found) = found {
                 let _ = this.update(cx, |this, cx| this.show(Some(found), cx));

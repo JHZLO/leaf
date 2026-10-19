@@ -17,6 +17,7 @@ use gpui_kit::{
     *,
 };
 use leaf_project::{
+    folders::Folders,
     fs::{self, EntryKind, NameError},
     nav::{self, NavKey, SearchStep},
     tree::{Guide, ProjectTree, Row},
@@ -96,6 +97,10 @@ pub enum PanelEvent {
     Locate,
     /// The header's minus: hide the tree, as Cmd+1 in it does.
     Hide,
+    /// The more menu's Add Folder…: ask for a folder to show in this window too.
+    AddFolder,
+    /// A folder row's Remove from Window (relative path of the folder's row).
+    RemoveFolder(PathBuf),
 }
 
 /// A small list floating over the tree.
@@ -105,6 +110,8 @@ enum Menu {
     New { dir: PathBuf, choice: usize },
     /// The header's more button.
     Options,
+    /// Right-click on one of several folders' rows.
+    Folder { path: PathBuf },
 }
 
 /// What Expand All reads at most, so a huge folder does not flood the tree.
@@ -119,6 +126,8 @@ pub enum FileEvent {
 
 pub struct ProjectPanel {
     tree: ProjectTree,
+    /// Where the tree's relative paths are on disk.
+    folders: Folders,
     focus_handle: FocusHandle,
     scroll: UniformListScrollHandle,
     pub show_key_hints: bool,
@@ -198,9 +207,10 @@ impl Focusable for ProjectPanel {
 }
 
 impl ProjectPanel {
-    pub fn new(root: PathBuf, cx: &mut Context<Self>) -> Self {
+    pub fn new(folders: Folders, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
-            tree: ProjectTree::new(root),
+            tree: ProjectTree::new(folders.first().to_path_buf()),
+            folders,
             focus_handle: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
             show_key_hints: crate::settings(cx).key_hints,
@@ -215,8 +225,8 @@ impl ProjectPanel {
         panel
     }
 
-    pub fn root(&self) -> &Path {
-        self.tree.root()
+    pub fn folders(&self) -> &Folders {
+        &self.folders
     }
 
     /// Reopens the folders and the selection a session saved; folders that no longer exist stay closed.
@@ -245,13 +255,18 @@ impl ProjectPanel {
         self.tree.selected()
     }
 
+    /// The rows the tree shows, top to bottom; for the UI checks.
+    pub fn row_paths(&self) -> Vec<PathBuf> {
+        self.tree.rows().into_iter().map(|row| row.path).collect()
+    }
+
     /// Reads one folder off the main thread and shows it when it arrives.
     pub fn load_dir(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
-        let root = self.tree.root().to_path_buf();
+        let folders = self.folders.clone();
         cx.spawn(async move |this, cx| {
             let listing = cx.background_spawn({
                 let dir = dir.clone();
-                async move { fs::list_dir(&root, &dir) }
+                async move { list(&folders, &dir) }
             });
             let Ok(entries) = listing.await else { return };
             let _ = this.update(cx, |this, cx| {
@@ -418,16 +433,29 @@ impl ProjectPanel {
             .tree
             .selected()
             .and_then(|s| rows.iter().find(|r| r.path == s));
-        let dir = match selected {
+        let mut dir = match selected {
             Some(row) if row.kind == EntryKind::Dir && !row.loops => row.path.clone(),
             Some(row) => row.path.parent().map(Path::to_path_buf).unwrap_or_default(),
             None => PathBuf::new(),
         };
+        // The window's node of several folders is on no disk: the first folder takes the item.
+        if self.folders.mount(&dir).is_none() {
+            dir = PathBuf::from(&self.folders.keys()[0]);
+        }
         if self.tree.expand(&dir) {
             self.load_dir(dir.clone(), cx);
         }
         self.menu = Some(Menu::New { dir, choice: 0 });
         self.reveal_selection();
+        cx.notify();
+    }
+
+    /// Right-click on one of several folders' rows: selects it and shows its menu.
+    fn open_folder_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+        self.watch_focus(window, cx);
+        self.tree.select(Some(path.clone()));
+        self.menu = Some(Menu::Folder { path });
         cx.notify();
     }
 
@@ -449,7 +477,7 @@ impl ProjectPanel {
     /// The header's Expand All: opens every folder that is not gitignored, reading them off the main
     /// thread, up to [`EXPAND_ALL_MOST`] folders.
     fn expand_all(&mut self, cx: &mut Context<Self>) {
-        let root = self.tree.root().to_path_buf();
+        let folders = self.folders.clone();
         let read = cx.background_spawn(async move {
             let mut queue = VecDeque::from([PathBuf::new()]);
             let mut found = Vec::new();
@@ -457,7 +485,7 @@ impl ProjectPanel {
                 if found.len() >= EXPAND_ALL_MOST {
                     break;
                 }
-                let Ok(entries) = fs::list_dir(&root, &dir) else {
+                let Ok(entries) = list(&folders, &dir) else {
                     continue;
                 };
                 queue.extend(
@@ -593,6 +621,20 @@ impl ProjectPanel {
             popup_box(cx)
                 .child(
                     popup_item(
+                        "tree-option-add",
+                        Some(IconName::FolderPlus),
+                        "Add Folder…",
+                        false,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.menu = None;
+                        cx.emit(PanelEvent::AddFolder);
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    popup_item(
                         "tree-option-hints",
                         hints.then_some(IconName::Check),
                         "Key Hints",
@@ -633,11 +675,11 @@ impl ProjectPanel {
             return;
         }
         let rows = self.tree.rows();
-        // The open folder's row renames nothing: the window is that folder.
+        // A folder's own row renames nothing: the window is that folder.
         let Some(row) = self
             .tree
             .selected()
-            .filter(|s| !s.as_os_str().is_empty())
+            .filter(|s| !s.as_os_str().is_empty() && !self.folders.is_folder(s))
             .and_then(|s| rows.iter().find(|r| r.path == s))
         else {
             return;
@@ -656,11 +698,11 @@ impl ProjectPanel {
         if self.edit.is_some() {
             return;
         }
-        // Never the open folder itself, whose row is the first one.
+        // Never a folder of the window itself (several leave by Remove from Window).
         let Some(path) = self
             .tree
             .selected()
-            .filter(|s| !s.as_os_str().is_empty())
+            .filter(|s| !s.as_os_str().is_empty() && !self.folders.is_folder(s))
             .map(Path::to_path_buf)
         else {
             return;
@@ -677,15 +719,17 @@ impl ProjectPanel {
             &["Move to Trash", "Cancel"],
             cx,
         );
-        let root = self.tree.root().to_path_buf();
+        let Some((root, rest, _)) = self.folders.mount(&path) else {
+            return;
+        };
+        let root = root.to_path_buf();
         cx.spawn_in(window, async move |this, cx| {
             if answer.await != Ok(0) {
                 return;
             }
-            let work = cx.background_executor().spawn({
-                let path = path.clone();
-                async move { fs::trash(&root, &path) }
-            });
+            let work = cx
+                .background_executor()
+                .spawn(async move { fs::trash(&root, &rest) });
             let result = work.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(()) => {
@@ -759,16 +803,23 @@ impl ProjectPanel {
         }
         edit.busy = true;
         let typed = edit.input.read(cx).value().to_string();
-        let root = self.tree.root().to_path_buf();
+        let target = match &edit.target {
+            EditTarget::New { dir, .. } => dir,
+            EditTarget::Rename { path } => path,
+        };
+        let Some((root, rest, prefix)) = self.folders.mount(target) else {
+            return;
+        };
+        let root = root.to_path_buf();
         match edit.target.clone() {
             EditTarget::New { dir, kind } => {
                 let typed = match kind {
                     EntryKind::Dir if !typed.trim_end().ends_with('/') => format!("{typed}/"),
                     _ => typed,
                 };
-                let work = cx.background_executor().spawn({
-                    let dir = dir.clone();
-                    async move { fs::create(&root, &dir, &typed) }
+                // Made inside its folder on disk, then named as the tree names it.
+                let work = cx.background_executor().spawn(async move {
+                    fs::create(&root, &rest, &typed).map(|(made, kind)| (prefix.join(made), kind))
                 });
                 cx.spawn_in(window, async move |this, cx| {
                     let result = work.await;
@@ -778,9 +829,8 @@ impl ProjectPanel {
                 .detach();
             }
             EditTarget::Rename { path } => {
-                let work = cx.background_executor().spawn({
-                    let path = path.clone();
-                    async move { fs::rename(&root, &path, &typed) }
+                let work = cx.background_executor().spawn(async move {
+                    fs::rename(&root, &rest, &typed).map(|renamed| prefix.join(renamed))
                 });
                 cx.spawn_in(window, async move |this, cx| {
                     let result = work.await;
@@ -1018,19 +1068,20 @@ impl ProjectPanel {
 
     /// `focused` is whether the tree has focus: the selection dims without it, the vein does not.
     /// The part of the name a speed search for `query` matched is set in semibold.
-    /// With `rename`, the name is an input. The open folder's row also shows `root_parent`,
-    /// the folder it sits in.
+    /// With `rename`, the name is an input. A folder of the window (and the window's own node) is
+    /// set in medium and shows `hint`, where it is on disk.
     fn render_row(
         row: &Row,
         selected: bool,
         focused: bool,
         query: Option<&str>,
         rename: Option<&EditView>,
-        root_parent: &SharedString,
+        hint: Option<&SharedString>,
         cx: &App,
     ) -> Stateful<Div> {
         let p = theme::colors(cx);
         let is_dir = row.kind == EntryKind::Dir;
+        let folder_row = row.path.as_os_str().is_empty() || hint.is_some();
         let (ink, chevron_color) = match (selected, focused) {
             (true, true) => (p.sel_ink, p.sel_ink),
             (true, false) => (p.ink, p.sub),
@@ -1070,7 +1121,7 @@ impl ProjectPanel {
         )
         .child({
             let (icon, tint) = if is_dir {
-                icons::folder_icon(row.expanded, row.path.as_os_str().is_empty())
+                icons::folder_icon(row.expanded, folder_row)
             } else {
                 icons::file_icon(&row.name)
             };
@@ -1086,7 +1137,7 @@ impl ProjectPanel {
         })
         .map(|el| match rename {
             Some(edit) => el.child(edit_field(edit, cx)),
-            None if row.path.as_os_str().is_empty() => el
+            None if folder_row => el
                 .child(
                     div()
                         .flex_none()
@@ -1094,14 +1145,14 @@ impl ProjectPanel {
                         .child(name_label(&row.name, query)),
                 )
                 .child(
-                    // A long parent path loses its start, keeping the folders nearest the root.
+                    // A long path loses its start, keeping the folders nearest the name.
                     div()
                         .min_w_0()
                         .overflow_hidden()
                         .text_ellipsis_start()
                         .text_size(z(12., cx))
                         .text_color(c(p.sub))
-                        .child(root_parent.clone()),
+                        .children(hint.cloned()),
                 ),
             None => el.child(name_label(&row.name, query)),
         })
@@ -1112,6 +1163,17 @@ impl ProjectPanel {
         Self::row_frame("tree-new", depth, guides, false, cx)
             .child(div().size(z(CHEVRON_SLOT, cx)).flex_none())
             .child(edit_field(edit, cx))
+    }
+}
+
+/// A folder's listing. With several folders the window's node lists them.
+fn list(folders: &Folders, dir: &Path) -> std::io::Result<Vec<leaf_project::fs::DirEntry>> {
+    if folders.several() && dir.as_os_str().is_empty() {
+        return Ok(folders.entries());
+    }
+    match folders.mount(dir) {
+        Some((root, rest, _)) => fs::list_dir(root, &rest),
+        None => Err(std::io::ErrorKind::NotFound.into()),
     }
 }
 
@@ -1261,6 +1323,40 @@ fn new_popup(
         ))
 }
 
+/// A folder row's menu, when the window has several: Remove from Window.
+fn folder_popup(
+    depth: usize,
+    path: PathBuf,
+    panel: WeakEntity<ProjectPanel>,
+    cx: &App,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .left(z(row_padding(depth) + CHEVRON_SLOT, cx))
+        .top_0()
+        .child(floating(
+            size::TREE_ROW,
+            Anchor::TopLeft,
+            popup_box(cx).child(
+                popup_item(
+                    "tree-folder-remove",
+                    Some(IconName::FolderMinus),
+                    "Remove from Window",
+                    false,
+                    cx,
+                )
+                .on_click(move |_, _, cx| {
+                    let _ = panel.update(cx, |this, cx| {
+                        this.menu = None;
+                        cx.emit(PanelEvent::RemoveFolder(path.clone()));
+                        cx.notify();
+                    });
+                }),
+            ),
+            cx,
+        ))
+}
+
 /// A row's name, its speed search match in semibold (medium barely shows at 13 px).
 fn name_label(name: &str, query: Option<&str>) -> StyledText {
     let text = StyledText::new(name.to_string());
@@ -1351,13 +1447,25 @@ impl Render for ProjectPanel {
         let rows = self.tree.rows();
         let selected = self.tree.selected().map(Path::to_path_buf);
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let root_parent: SharedString = self
-            .tree
-            .root()
-            .parent()
-            .map(|parent| tilde(parent, home.as_deref()))
-            .unwrap_or_default()
-            .into();
+        // Where the folders are: one folder's row shows the folder it sits in (IntelliJ), several
+        // show their own places under the window's node.
+        let places: Vec<(PathBuf, SharedString)> = if self.folders.several() {
+            self.folders
+                .roots()
+                .iter()
+                .zip(self.folders.keys())
+                .map(|(root, key)| (PathBuf::from(key), tilde(root, home.as_deref()).into()))
+                .collect()
+        } else {
+            let parent = self.folders.first().parent();
+            vec![(
+                PathBuf::new(),
+                parent
+                    .map(|parent| tilde(parent, home.as_deref()))
+                    .unwrap_or_default()
+                    .into(),
+            )]
+        };
         let selected_row = selected
             .as_ref()
             .and_then(|s| rows.iter().find(|r| &r.path == s))
@@ -1469,6 +1577,16 @@ impl Render for ProjectPanel {
                         Some(Menu::New { choice, .. }) => Some(*choice),
                         _ => None,
                     };
+                    let folder_menu = match &self.menu {
+                        Some(Menu::Folder { path }) => Some(path.clone()),
+                        _ => None,
+                    };
+                    // With several folders, a folder's row has a menu (right-click).
+                    let folder_rows: Vec<PathBuf> = if self.folders.several() {
+                        self.folders.keys().iter().map(PathBuf::from).collect()
+                    } else {
+                        Vec::new()
+                    };
                     move |range, _, cx| {
                         items[range]
                             .iter()
@@ -1482,7 +1600,10 @@ impl Render for ProjectPanel {
                                         focused,
                                         None,
                                         Some(edit),
-                                        &root_parent,
+                                        places
+                                            .iter()
+                                            .find(|(path, _)| *path == row.path)
+                                            .map(|(_, place)| place),
                                         cx,
                                     )
                                     .into_any_element()
@@ -1493,7 +1614,16 @@ impl Render for ProjectPanel {
                                         selected.as_deref() == Some(row.path.as_path());
                                     let popup = new_choice.filter(|_| is_selected).map(|choice| {
                                         new_popup(row.depth, choice, panel.clone(), cx)
+                                            .into_any_element()
                                     });
+                                    let folder_popup = folder_menu
+                                        .as_ref()
+                                        .filter(|path| **path == row.path)
+                                        .map(|path| {
+                                            folder_popup(row.depth, path.clone(), panel.clone(), cx)
+                                                .into_any_element()
+                                        });
+                                    let is_folder = folder_rows.contains(&row.path);
                                     let panel = panel.clone();
                                     Self::render_row(
                                         row,
@@ -1501,10 +1631,25 @@ impl Render for ProjectPanel {
                                         focused,
                                         query.as_deref(),
                                         None,
-                                        &root_parent,
+                                        places
+                                            .iter()
+                                            .find(|(path, _)| *path == row.path)
+                                            .map(|(_, place)| place),
                                         cx,
                                     )
                                     .children(popup)
+                                    .children(folder_popup)
+                                    .when(is_folder, |el| {
+                                        let (panel, path) = (panel.clone(), row.path.clone());
+                                        el.on_mouse_down(
+                                            MouseButton::Right,
+                                            move |_, window, cx| {
+                                                let _ = panel.update(cx, |this, cx| {
+                                                    this.open_folder_menu(path.clone(), window, cx)
+                                                });
+                                            },
+                                        )
+                                    })
                                     .on_click(move |event, _, cx| {
                                         let count = event.click_count();
                                         let _ = panel.update(cx, |this, cx| {

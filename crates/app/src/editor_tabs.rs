@@ -15,6 +15,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{assets::IconName, prelude::FluentBuilder as _, *};
 use leaf_project::{
+    folders::Folders,
     fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile},
     markdown::{self, Edit, Emphasis},
     session::TabState,
@@ -72,7 +73,8 @@ struct PendingOpen {
 }
 
 pub struct EditorTabs {
-    root: PathBuf,
+    /// Where the tabs' relative paths are on disk.
+    folders: Folders,
     tabs: Vec<Tab>,
     active: Option<usize>,
     pending: Vec<PendingOpen>,
@@ -150,9 +152,55 @@ fn language_for(path: &Path) -> SharedString {
 }
 
 impl EditorTabs {
-    pub fn new(root: PathBuf, cx: &mut Context<Self>) -> Self {
+    /// Where `rel` is on disk.
+    fn abs(&self, rel: &Path) -> PathBuf {
+        self.folders
+            .absolute(rel)
+            .unwrap_or_else(|| rel.to_path_buf())
+    }
+
+    /// The window's folders changed: each tab keeps its file under the file's new path. A tab whose
+    /// folder left the window closes; the workspace keeps a folder with unsaved tabs from leaving.
+    pub fn set_folders(&mut self, folders: Folders, window: &mut Window, cx: &mut Context<Self>) {
+        let moved =
+            |old: &Folders, rel: &Path| old.absolute(rel).and_then(|abs| folders.relative(&abs));
+        let mapped: Vec<Option<PathBuf>> = self
+            .tabs
+            .iter()
+            .map(|tab| moved(&self.folders, &tab.path))
+            .collect();
+        for index in (0..mapped.len()).rev() {
+            if mapped[index].is_none() {
+                self.remove_tab(index, window, cx);
+            }
+        }
+        for (tab, path) in self.tabs.iter_mut().zip(mapped.into_iter().flatten()) {
+            tab.path = path;
+        }
+        let old = std::mem::replace(&mut self.folders, folders.clone());
+        self.pending
+            .retain_mut(|open| match moved(&old, &open.path) {
+                Some(path) => {
+                    open.path = path;
+                    true
+                }
+                None => false,
+            });
+        self.refresh_preview(cx);
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
+    /// Whether a tab under `rel` has unsaved changes.
+    pub fn unsaved_under(&self, rel: &Path) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| tab.dirty && tab.path.starts_with(rel))
+    }
+
+    pub fn new(folders: Folders, cx: &mut Context<Self>) -> Self {
         Self {
-            root,
+            folders,
             tabs: Vec::new(),
             active: None,
             pending: Vec::new(),
@@ -223,7 +271,7 @@ impl EditorTabs {
             leaf_through,
             cursor: None,
         });
-        let abs = self.root.join(path);
+        let abs = self.abs(path);
         let read = cx
             .background_executor()
             .spawn(async move { fs::read_text(&abs) });
@@ -431,7 +479,11 @@ impl EditorTabs {
         let edits = tab.edits;
         // The rope is shared, not copied; it becomes a string on the background executor.
         let text = tab.editor.read(cx).text().clone();
-        let path = self.root.join(&tab.path);
+        // The field, not `abs`: `tab` borrows the tabs.
+        let path = self
+            .folders
+            .absolute(&tab.path)
+            .unwrap_or_else(|| tab.path.clone());
         // A deleted file is written again without asking.
         let expected = (!overwrite && !tab.deleted).then_some(tab.stamp);
         let (line_ending, bom) = (tab.line_ending, tab.bom);
@@ -676,14 +728,7 @@ impl EditorTabs {
             .tabs
             .iter()
             .filter(|t| files.iter().any(|f| t.path.starts_with(f)))
-            .map(|t| {
-                (
-                    t.editor.entity_id(),
-                    self.root.join(&t.path),
-                    t.stamp,
-                    t.dirty,
-                )
-            })
+            .map(|t| (t.editor.entity_id(), self.abs(&t.path), t.stamp, t.dirty))
             .collect();
         if checks.is_empty() {
             return;
@@ -787,7 +832,7 @@ impl EditorTabs {
         let Some(index) = self.index_of(id) else {
             return;
         };
-        let path = self.root.join(&self.tabs[index].path);
+        let path = self.abs(&self.tabs[index].path);
         let read = cx
             .background_executor()
             .spawn(async move { fs::read_text(&path) });
@@ -975,7 +1020,7 @@ impl EditorTabs {
         // Relative image paths in the Markdown resolve against the file's own folder.
         let folder = self
             .active_tab()
-            .and_then(|t| self.root.join(&t.path).parent().map(Path::to_path_buf));
+            .and_then(|t| self.abs(&t.path).parent().map(Path::to_path_buf));
         preview.update(cx, |preview, cx| preview.show(source, folder, cx));
     }
 

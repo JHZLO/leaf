@@ -5,6 +5,7 @@ use std::{ops::Range, path::PathBuf, sync::Arc};
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use leaf_project::{
+    folders::Folders,
     fuzzy,
     index::{self, FileIndex},
 };
@@ -57,7 +58,7 @@ impl Focusable for Finder {
 }
 
 impl Finder {
-    pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(folders: Folders, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to file"));
         let subscriptions = vec![cx.subscribe_in(
             &input,
@@ -70,7 +71,7 @@ impl Finder {
         )];
         let load = cx.spawn(async move |this, cx| {
             let index = cx
-                .background_spawn(async move { index::build(&root) })
+                .background_spawn(async move { index::build_folders(&folders) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.index = Some(Arc::new(index));
