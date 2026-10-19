@@ -7,12 +7,12 @@ use std::{
 };
 
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
     input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _, TabSize},
 };
-use gpui_kit::{prelude::FluentBuilder as _, *};
+use gpui_kit::{assets::IconName, prelude::FluentBuilder as _, *};
 use leaf_project::{
     fs::{self, FileStamp, LineEnding, MAX_HIGHLIGHT_BYTES, ReadError, TextFile},
     markdown::{self, Edit, Emphasis},
@@ -20,6 +20,7 @@ use leaf_project::{
 };
 
 use crate::{
+    icons,
     keymap::{IndentItem, MARKDOWN, Newline, OutdentItem, ToggleBold, ToggleItalic},
     preview::Preview,
     theme::{self, c, size, z},
@@ -541,12 +542,42 @@ impl EditorTabs {
 
     /// Closes the active tab, asking first when it has unsaved edits.
     pub fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.active_tab() else { return };
-        let id = tab.editor.entity_id();
+        if let Some(index) = self.active {
+            self.close_at(index, window, cx);
+        }
+    }
+
+    /// Closes a tab, asking first when it has unsaved changes (the tab's x, Cmd+W).
+    pub fn close_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
         if tab.dirty {
-            self.confirm_close(id, window, cx);
-        } else if let Some(index) = self.index_of(id) {
+            self.confirm_close(tab.editor.entity_id(), window, cx);
+        } else {
             self.remove_tab(index, window, cx);
+        }
+    }
+
+    /// Option-click on a tab's x, as in IntelliJ: closes every other tab. Tabs with unsaved changes
+    /// stay open rather than asking about each one.
+    pub fn close_others(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(keep) = self.tabs.get(index).map(|t| t.editor.entity_id()) else {
+            return;
+        };
+        let doomed: Vec<EntityId> = self
+            .tabs
+            .iter()
+            .filter(|t| !t.dirty && t.editor.entity_id() != keep)
+            .map(|t| t.editor.entity_id())
+            .collect();
+        for id in doomed {
+            if let Some(index) = self.index_of(id) {
+                self.remove_tab(index, window, cx);
+            }
+        }
+        if let Some(index) = self.index_of(keep) {
+            self.activate(index, window, cx);
         }
     }
 
@@ -977,15 +1008,19 @@ impl EditorTabs {
             .map(|(i, tab)| {
                 let active = self.active == Some(i);
                 let name = file_name(&tab.path);
+                let (icon, tint) = icons::file_icon(&name);
+                let group = SharedString::from(format!("editor-tab-{i}"));
                 div()
                     .id(("tab", i))
+                    .group(group.clone())
                     .relative()
                     .flex_none()
                     .h_full()
                     .flex()
                     .items_center()
                     .gap(z(7., cx))
-                    .px(z(16., cx))
+                    .pl(z(14., cx))
+                    .pr(z(8., cx))
                     .border_r_1()
                     .border_color(c(p.line))
                     .text_color(c(if active && !tab.deleted { p.ink } else { p.sub }))
@@ -997,6 +1032,12 @@ impl EditorTabs {
                         }
                     })
                     .when(tab.leaf_through, |el| el.italic())
+                    .child(
+                        Icon::new(icon)
+                            .size(z(14., cx))
+                            .flex_none()
+                            .text_color(c(tint.color(p))),
+                    )
                     .child(div().when(tab.deleted, |el| el.line_through()).child(name))
                     .when(tab.dirty, |el| {
                         el.child(
@@ -1007,6 +1048,32 @@ impl EditorTabs {
                                 .bg(c(p.sub)),
                         )
                     })
+                    // IntelliJ's x: on the tab in front, on the others when hovered. Option-click closes
+                    // the other tabs.
+                    .child(
+                        div()
+                            .id(("tab-close", i))
+                            .flex_none()
+                            .size(z(16., cx))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(z(4., cx))
+                            .text_color(c(p.sub))
+                            .when(!active, |el| {
+                                el.invisible().group_hover(group, |style| style.visible())
+                            })
+                            .hover(|style| style.bg(c(p.guide)).text_color(c(p.ink)))
+                            .child(Icon::new(IconName::X).size(z(12., cx)))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                if event.modifiers().alt {
+                                    this.close_others(i, window, cx);
+                                } else {
+                                    this.close_at(i, window, cx);
+                                }
+                            })),
+                    )
                     // Drawn over the tab rather than as a border, so the active tab is as tall as the rest.
                     .when(active, |el| {
                         el.child(
