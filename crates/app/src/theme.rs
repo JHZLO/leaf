@@ -129,7 +129,6 @@ pub mod size {
     pub const KEY_HINTS: f32 = 30.;
     pub const TAB_BAR: f32 = 34.;
     pub const STATUS_BAR: f32 = 26.;
-    pub const SHEET: f32 = 720.;
     pub const UI_TEXT: f32 = 13.;
     pub const EDITOR_TEXT: f32 = 13.;
     /// The space between the islands (tree, editor, terminal), which is also where they resize.

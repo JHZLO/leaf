@@ -1346,11 +1346,8 @@ impl Render for EditorTabs {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(z(theme::editor_text(cx), cx));
                 if tab.is_markdown() {
-                    // The paper sheet: a reading-width page, keeping 20 px on each side when the pane is
-                    // narrower than the page. The sides are one tone under the paper; the desk itself is
-                    // the window around the islands. Beside the preview the sheet fills its pane, so
-                    // the text and its rendering are only the divider apart.
-                    let beside_preview = self.preview.is_some();
+                    // The full width, as code and as IntelliJ shows Markdown (the user asked for it
+                    // over a centered reading-width page), with the Markdown editing keys.
                     body.key_context(MARKDOWN)
                         .on_action(cx.listener(Self::newline))
                         .on_action(cx.listener(Self::indent_item))
@@ -1361,23 +1358,8 @@ impl Render for EditorTabs {
                         .on_action(cx.listener(|this, _: &ToggleItalic, window, cx| {
                             this.toggle_emphasis(Emphasis::Italic, window, cx)
                         }))
-                        .flex()
-                        .justify_center()
-                        .when(!beside_preview, |el| el.px(z(20., cx)))
-                        .bg(c(p.side))
-                        .child(
-                            div()
-                                .w_full()
-                                .when(!beside_preview, |el| {
-                                    el.max_w(z(size::SHEET, cx))
-                                        .border_x_1()
-                                        .border_color(c(p.line))
-                                })
-                                .h_full()
-                                .py(z(20., cx))
-                                .bg(c(p.paper))
-                                .child(editor),
-                        )
+                        .bg(c(p.paper))
+                        .child(editor)
                 } else {
                     body.bg(c(p.paper)).child(editor)
                 }
