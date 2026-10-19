@@ -6,7 +6,8 @@ A light, fast, keyboard-first text and Markdown editor for macOS, written in Rus
 [GPUI](https://github.com/zed-industries/zed) (through [GPUI Kit](https://github.com/longbridge/gpui-component)).
 
 Open a folder, walk its tree with the arrow keys, copy paths in one keystroke, and read Markdown
-and code with syntax highlighting. An editor, not an IDE: no language servers, terminal or plugins.
+and code with syntax highlighting, with your shell a keystroke away. An editor, not an IDE: no
+language servers or plugins.
 
 Early days: macOS only, built from source.
 
@@ -74,6 +75,7 @@ The keys follow IntelliJ IDEA.
 | | `Cmd+Shift+[` / `]` | Previous / next tab |
 | | `Cmd+Shift+V` | Markdown preview |
 | | `Cmd+=`, `Cmd+-`, `Cmd+0` | Zoom in, out, back to 100% |
+| | `Alt+F12` | Terminal in the open folder (in the terminal: hide it, the shell keeps running) |
 | Tree | `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown` | Move |
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
 | | `Enter` | Open the file (or toggle the folder) |
@@ -81,6 +83,7 @@ The keys follow IntelliJ IDEA.
 | | type letters | Jump to a name |
 | | `Cmd+N`, `Shift+F6`, `Cmd+Backspace` | New file (`name/` for a folder), rename, move to the Trash |
 | | `Esc` | Back to the editor |
+| Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
 | Markdown | `Enter`, `Tab`, `Shift+Tab` | Continue a list, indent or outdent a list item |
 | | `Cmd+B`, `Cmd+I` | Bold, italic |
 

@@ -1,0 +1,94 @@
+//! The terminal: Alt+F12 opens a shell in the open folder, typed text and keys reach it, Alt+F12
+//! hides it (the shell lives on), and `exit` closes it. The shell is /bin/sh (`LEAF_SHELL`), so
+//! nobody's login files change what the checks see.
+
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+
+use gpui_kit::AnyWindowHandle;
+
+use crate::check::{Check, fixture};
+
+pub fn run(check: &mut Check) {
+    let fixture = fixture();
+    let root = fixture.path().canonicalize().expect("root");
+    let window = check.open(Some(&root));
+    check.keys(window, "alt-f12");
+    let opened = check.workspace(window, |w, cx| w.terminal_lines(cx).is_some());
+    check.expect_eq("alt-f12 opens the terminal", opened, true);
+
+    // Type once the prompt is up, as a person would.
+    let prompt = wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$'))
+    });
+    check.expect_eq("the shell shows its prompt", prompt, true);
+    check.keys(window, "e c h o space h i enter");
+    let echoed = wait_for(check, window, |lines| lines.iter().any(|l| l == "hi"));
+    check.expect_eq("typed text and enter reach the shell", echoed, true);
+
+    check.keys(window, "p w d enter");
+    let here = wait_for(check, window, |lines| {
+        lines.iter().any(|l| Path::new(l) == root)
+    });
+    check.expect_eq("the shell starts in the open folder", here, true);
+
+    // Ctrl+C interrupts a running command; the next one runs at once.
+    check.keys(
+        window,
+        "s l e e p space 3 0 enter ctrl-c e c h o space o k enter",
+    );
+    let interrupted = wait_for(check, window, |lines| lines.iter().any(|l| l == "ok"));
+    check.expect_eq("ctrl-c interrupts sleep", interrupted, true);
+    check.shot(window, "terminal-1-shell");
+
+    // Tab belongs to the shell, not to focus moves: the terminal keeps the keys after it.
+    check.keys(window, "tab e c h o space t a b b e d enter");
+    let tabbed = wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with("tabbed"))
+    });
+    check.expect_eq("tab stays in the terminal", tabbed, true);
+
+    check.keys(window, "alt-f12");
+    let hidden = check.workspace(window, |w, cx| w.terminal_lines(cx).is_none());
+    check.expect_eq("alt-f12 in the terminal hides it", hidden, true);
+    check.keys(window, "alt-f12");
+    let kept = check.workspace(window, |w, cx| {
+        w.terminal_lines(cx)
+            .is_some_and(|lines| lines.iter().any(|l| l == "hi"))
+    });
+    check.expect_eq("the hidden shell lives on", kept, true);
+
+    check.keys(window, "e x i t enter");
+    let closed = wait_for_workspace(check, window, |w, cx| w.terminal_lines(cx).is_none());
+    check.expect_eq("exit closes the terminal", closed, true);
+}
+
+/// The shell answers on its own thread; give it up to five seconds.
+fn wait_for(check: &mut Check, window: AnyWindowHandle, found: impl Fn(&[String]) -> bool) -> bool {
+    wait_for_workspace(check, window, |w, cx| {
+        w.terminal_lines(cx).is_some_and(|lines| {
+            let lines: Vec<String> = lines.iter().map(|l| l.trim_end().to_string()).collect();
+            found(&lines)
+        })
+    })
+}
+
+fn wait_for_workspace(
+    check: &mut Check,
+    window: AnyWindowHandle,
+    found: impl Fn(&leaf::workspace::Workspace, &gpui_kit::App) -> bool,
+) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        check.cx.run_until_parked();
+        if check.workspace(window, &found) {
+            return true;
+        }
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}

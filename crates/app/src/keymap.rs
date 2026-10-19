@@ -27,6 +27,7 @@ actions!(
         RevealInFinder,
         ToggleSearch,
         NewWindow,
+        ToggleTerminal,
     ]
 );
 
@@ -49,6 +50,11 @@ actions!(
         Trash,
     ]
 );
+
+/// The terminal panel has focus.
+pub const TERMINAL: &str = "Terminal";
+
+actions!(terminal, [CopySelection, Paste, SendTab, SendBackTab]);
 
 /// Around the editor of a Markdown tab.
 pub const MARKDOWN: &str = "Markdown";
@@ -153,5 +159,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", OutdentItem, Some(MARKDOWN_EDITOR)),
         KeyBinding::new("cmd-b", ToggleBold, Some(MARKDOWN_EDITOR)),
         KeyBinding::new("cmd-i", ToggleItalic, Some(MARKDOWN_EDITOR)),
+        // The terminal (IntelliJ's Alt+F12). Keys without a binding go to the shell.
+        KeyBinding::new("alt-f12", ToggleTerminal, ws),
+        KeyBinding::new("cmd-c", CopySelection, Some(TERMINAL)),
+        KeyBinding::new("cmd-v", Paste, Some(TERMINAL)),
+        // gpui-kit's root moves focus with tab and shift-tab; in the terminal they are the shell's.
+        KeyBinding::new("tab", SendTab, Some(TERMINAL)),
+        KeyBinding::new("shift-tab", SendBackTab, Some(TERMINAL)),
     ]);
 }

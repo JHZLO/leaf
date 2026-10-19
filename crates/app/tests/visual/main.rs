@@ -9,6 +9,7 @@ mod markdown;
 mod phase1;
 mod preview_sync;
 mod search;
+mod terminal;
 mod tree;
 mod windows;
 
@@ -31,6 +32,7 @@ fn main() {
     unsafe {
         std::env::set_var("LEAF_SESSION_PATH", session.path());
         std::env::set_var("LEAF_SETTINGS_PATH", settings.path());
+        std::env::set_var("LEAF_SHELL", "/bin/sh");
     }
 
     let mut cx = VisualTestAppContext::new(current_platform(false));
@@ -48,6 +50,7 @@ fn main() {
     search::run(&mut check);
     preview_sync::run(&mut check);
     windows::run(&mut check);
+    terminal::run(&mut check);
 
     if check.failures.is_empty() {
         println!("visual checks passed; screenshots in target/visual/");

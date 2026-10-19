@@ -16,12 +16,13 @@ use crate::{
     keymap::{
         CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewWindow, NextTab, Open,
         OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder,
-        TogglePreview, ToggleSearch, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{FileEvent, PanelEvent, ProjectPanel},
     search_panel::{self, SearchEvent, SearchPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
-    theme::{self, ZOOM_STEPS, c},
+    terminal_panel::{TerminalEvent, TerminalPanel},
+    theme::{self, ZOOM_STEPS, c, size, z},
     title_bar,
 };
 
@@ -37,6 +38,13 @@ enum OverlayView {
     Search(Entity<SearchPanel>),
 }
 
+/// The shell under the editor, kept while hidden so its session survives Alt+F12.
+struct Terminal {
+    view: Entity<TerminalPanel>,
+    visible: bool,
+    _subscription: Subscription,
+}
+
 struct Overlay {
     view: OverlayView,
     /// Where focus goes back when the overlay closes without opening a file.
@@ -48,6 +56,7 @@ pub struct Workspace {
     panel: Option<Entity<ProjectPanel>>,
     tabs: Entity<EditorTabs>,
     tree_visible: bool,
+    terminal: Option<Terminal>,
     overlay: Option<Overlay>,
     copied: Option<Copied>,
     copy_seq: u64,
@@ -334,6 +343,7 @@ impl Workspace {
             panel: None,
             tabs,
             tree_visible: true,
+            terminal: None,
             overlay: None,
             copied: None,
             copy_seq: 0,
@@ -606,6 +616,71 @@ impl Workspace {
     /// The open folder, if any.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
         self.panel.as_ref().map(|p| p.read(cx).root().to_path_buf())
+    }
+
+    /// The lines the terminal shows, when it is open; for the UI checks.
+    pub fn terminal_lines(&self, cx: &App) -> Option<Vec<String>> {
+        let terminal = self.terminal.as_ref().filter(|t| t.visible)?;
+        Some(terminal.view.read(cx).visible_lines(cx))
+    }
+
+    fn terminal_focused(&self, window: &Window, cx: &App) -> bool {
+        self.terminal.as_ref().is_some_and(|t| {
+            t.view
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx)
+        })
+    }
+
+    /// Alt+F12, as in IntelliJ: opens the terminal (starting the shell the first time) and gives
+    /// it focus; pressed in the terminal, hides it and goes back to the editor.
+    fn toggle_terminal(&mut self, _: &ToggleTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terminal_focused(window, cx) {
+            if let Some(terminal) = &mut self.terminal {
+                terminal.visible = false;
+            }
+            self.focus_editor_area(window, cx);
+            cx.notify();
+            return;
+        }
+        if self.terminal.is_none() {
+            let Some(root) = self.root(cx) else {
+                return;
+            };
+            let started = match TerminalPanel::start(&root) {
+                Ok(started) => started,
+                Err(err) => {
+                    eprintln!("leaf: could not start the shell: {err}");
+                    return;
+                }
+            };
+            let view = cx.new(|cx| TerminalPanel::new(started, window, cx));
+            let subscription = cx.subscribe_in(
+                &view,
+                window,
+                |this, _, event: &TerminalEvent, window, cx| match event {
+                    TerminalEvent::Exited => {
+                        let had_focus = this.terminal_focused(window, cx);
+                        this.terminal = None;
+                        if had_focus {
+                            this.focus_editor_area(window, cx);
+                        }
+                        cx.notify();
+                    }
+                },
+            );
+            self.terminal = Some(Terminal {
+                view,
+                visible: false,
+                _subscription: subscription,
+            });
+        }
+        if let Some(terminal) = &mut self.terminal {
+            terminal.visible = true;
+            terminal.view.read(cx).focus_handle(cx).focus(window, cx);
+        }
+        cx.notify();
     }
 
     fn tree_focused(&self, window: &Window, cx: &App) -> bool {
@@ -927,6 +1002,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::focus_editor))
             .on_action(cx.listener(Self::toggle_finder))
             .on_action(cx.listener(Self::toggle_search))
+            .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::save))
@@ -977,7 +1053,27 @@ impl Render for Workspace {
                         |el, panel| el.child(panel),
                     )
                     .map(|el| match self.panel {
-                        Some(_) => el.child(self.tabs.clone()),
+                        Some(_) => el.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(div().flex_1().min_h_0().flex().child(self.tabs.clone()))
+                                .when_some(
+                                    self.terminal.as_ref().filter(|t| t.visible),
+                                    |el, terminal| {
+                                        el.child(
+                                            div()
+                                                .flex_none()
+                                                .h(z(size::TERMINAL_HEIGHT, cx))
+                                                .border_t_1()
+                                                .border_color(c(p.line))
+                                                .child(terminal.view.clone()),
+                                        )
+                                    },
+                                ),
+                        ),
                         None => {
                             let this = cx.entity().downgrade();
                             el.child(empty_state::render(

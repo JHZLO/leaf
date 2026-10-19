@@ -28,6 +28,9 @@ pub struct Palette {
     pub syn_keyword: u32,
     pub syn_type: u32,
     pub syn_comment: u32,
+    /// The terminal's 16 named colors (black, red, green, yellow, blue, magenta, cyan, white,
+    /// then their bright forms), toned to the paper like the syntax colors.
+    pub ansi: [u32; 16],
 }
 
 pub const LIGHT: Palette = Palette {
@@ -54,6 +57,10 @@ pub const LIGHT: Palette = Palette {
     syn_keyword: 0x7A4E9C,
     syn_type: 0x2F6B8A,
     syn_comment: 0x9A9387,
+    ansi: [
+        0x2D2A25, 0xA63D2F, 0x4A7A2C, 0x8A6516, 0x2F6B8A, 0x7A4E9C, 0x2E7672, 0x8F887C, 0x6F695F,
+        0xC0493A, 0x5E9440, 0xA97B1C, 0x3B7FA6, 0x9461B8, 0x3A9894, 0xB3AC9F,
+    ],
 };
 
 pub const DARK: Palette = Palette {
@@ -80,13 +87,17 @@ pub const DARK: Palette = Palette {
     syn_keyword: 0xC9A0DC,
     syn_type: 0x7FB3CF,
     syn_comment: 0x7D7568,
+    ansi: [
+        0x3B362F, 0xE07A68, 0x8DBF6A, 0xD7A46B, 0x7FB3CF, 0xC9A0DC, 0x7CC4BE, 0xE3DDD2, 0x7D7568,
+        0xF09080, 0x9CCB78, 0xE6BC85, 0x98C5DE, 0xD6B4E6, 0x94D4CE, 0xF5F1EA,
+    ],
 };
 
 /// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.
 pub const MONO_FONT: &str = ".AppleSystemUIFontMonospaced";
 
 /// The editor font the settings name, with "SF Mono" mapped to the name GPUI can find.
-fn editor_font(cx: &App) -> String {
+pub fn editor_font(cx: &App) -> String {
     match crate::settings(cx).editor_font.as_str() {
         "SF Mono" => MONO_FONT.to_string(),
         other => other.to_string(),
@@ -120,6 +131,9 @@ pub mod size {
     pub const SHEET: f32 = 720.;
     pub const UI_TEXT: f32 = 13.;
     pub const EDITOR_TEXT: f32 = 13.;
+    pub const TERMINAL_HEIGHT: f32 = 260.;
+    /// The terminal's line height, as a multiple of its text size.
+    pub const TERMINAL_LINE: f32 = 1.3;
 }
 
 /// UI zoom steps, in percent.
