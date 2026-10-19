@@ -10,11 +10,11 @@ use crate::{
     theme::{self, c, z},
 };
 
-/// The subwy mark (assets/brand/mark.svg): the first three lines of the tree's route crossing at
-/// two interchanges, with the station at the end of the first line.
+/// The subwy mark (assets/brand/mark.svg): three route lines crossing at two interchanges, with
+/// the station at the end of the first line, in the logo's bright colors.
 pub fn subwy_mark(side: Pixels, cx: &App) -> impl IntoElement {
     let p = theme::colors(cx);
-    let [first, second, third] = [p.route[0], p.route[1], p.route[2]].map(c);
+    let [first, second, third] = p.brand.map(c);
     let (ink, paper) = (c(p.ink), c(p.paper));
     canvas(
         |_, _, _| {},

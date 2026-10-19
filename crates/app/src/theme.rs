@@ -33,9 +33,11 @@ pub struct Palette {
     /// The terminal's 16 named colors (black, red, green, yellow, blue, magenta, cyan, white,
     /// then their bright forms), toned to the paper like the syntax colors.
     pub ansi: [u32; 16],
-    /// The tree's route: the line leaving each depth's folder, the open folder's first, in the
-    /// bright colors of metro-map lines. The logo is the first three.
+    /// The tree's route: the line leaving each depth's folder, the open folder's first, in soft
+    /// pastel tones of metro-map lines (the user asked for pastel inside the app).
     pub route: [u32; 6],
+    /// The logo's three lines, which keep the bright colors of the app icon.
+    pub brand: [u32; 3],
 }
 
 pub const LIGHT: Palette = Palette {
@@ -48,16 +50,16 @@ pub const LIGHT: Palette = Palette {
     sub: 0x6B6C70,
     num: 0xB5B4B0,
     ignored: 0xA2A3A7,
-    accent: 0x12A150,
-    accent_text: 0x0E8A44,
-    sel_bg: 0xC3D6AE,
-    sel_ink: 0x26401A,
+    accent: 0x5DBB8A,
+    accent_text: 0x2F8F62,
+    sel_bg: 0xBFE6D0,
+    sel_ink: 0x1F4D3A,
     tree_sel: 0xECEAE5,
     cur: 0xF4F2EE,
     hover: 0xF1EFEB,
     guide: 0xE0DED9,
     fold: 0xD5D3CE,
-    syn_title: 0x1A7F46,
+    syn_title: 0x3A9466,
     syn_mark: 0xA2A3A7,
     syn_literal: 0xB4530F,
     syn_keyword: 0x8B3FD9,
@@ -67,7 +69,8 @@ pub const LIGHT: Palette = Palette {
         0x2D2A25, 0xA63D2F, 0x4A7A2C, 0x8A6516, 0x2F6B8A, 0x7A4E9C, 0x2E7672, 0x8F887C, 0x6F695F,
         0xC0493A, 0x5E9440, 0xA97B1C, 0x3B7FA6, 0x9461B8, 0x3A9894, 0xB3AC9F,
     ],
-    route: [0x12A150, 0xF07800, 0xE5306A, 0x1E6BFF, 0x7B4DFF, 0x0E9F94],
+    route: [0x6CC193, 0xF2A66E, 0xEE8AAE, 0x7EA8EE, 0xAE95EE, 0x69C4BF],
+    brand: [0x12A150, 0xFF7A00, 0xF0306E],
 };
 
 pub const DARK: Palette = Palette {
@@ -80,16 +83,16 @@ pub const DARK: Palette = Palette {
     sub: 0x8D8F95,
     num: 0x4A4C52,
     ignored: 0x5E6066,
-    accent: 0x2BD47A,
-    accent_text: 0x4CE08F,
-    sel_bg: 0x405A36,
-    sel_ink: 0xD6EBC4,
+    accent: 0x8EDDB1,
+    accent_text: 0x8EDDB1,
+    sel_bg: 0x34584A,
+    sel_ink: 0xD3F0E2,
     tree_sel: 0x22242A,
     cur: 0x1A1C20,
     hover: 0x1C1E22,
     guide: 0x2A2D33,
     fold: 0x3A3D44,
-    syn_title: 0x4CE08F,
+    syn_title: 0x8EDDB1,
     syn_mark: 0x5E6066,
     syn_literal: 0xF5B379,
     syn_keyword: 0xC4A1FF,
@@ -99,7 +102,8 @@ pub const DARK: Palette = Palette {
         0x3B362F, 0xE07A68, 0x8DBF6A, 0xD7A46B, 0x7FB3CF, 0xC9A0DC, 0x7CC4BE, 0xE3DDD2, 0x7D7568,
         0xF09080, 0x9CCB78, 0xE6BC85, 0x98C5DE, 0xD6B4E6, 0x94D4CE, 0xF5F1EA,
     ],
-    route: [0x2BD47A, 0xFF9A3D, 0xFF5A92, 0x5B93FF, 0xA47BFF, 0x3DD6C8],
+    route: [0x8EDDB1, 0xF7BE8F, 0xF5A3C0, 0x9DBEF5, 0xC3B1F5, 0x8FDAD5],
+    brand: [0x2BD47A, 0xFF9A3D, 0xFF5A92],
 };
 
 /// SF Mono. GPUI finds it only by the system's monospaced font name; "SF Mono" falls back to Helvetica.
