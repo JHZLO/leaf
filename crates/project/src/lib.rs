@@ -10,5 +10,6 @@ pub mod paths;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod terminal;
 pub mod tree;
 pub mod watch;
