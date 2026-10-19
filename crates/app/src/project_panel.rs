@@ -29,7 +29,7 @@ use crate::{
     keymap::{
         Collapse, CopyPath, Expand, FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
         PassThrough, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
-        Trash,
+        SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -418,6 +418,16 @@ impl ProjectPanel {
         self.search.get_or_insert_default().push_str(text);
         self.search_step(SearchStep::Here, cx);
         cx.stop_propagation();
+    }
+
+    /// Cmd+F, as in IntelliJ's tree: opens the speed search empty, so the next letters find a name.
+    fn start_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() || self.menu.is_some() {
+            return;
+        }
+        self.watch_focus(window, cx);
+        self.search.get_or_insert_default();
+        cx.notify();
     }
 
     /// Escape cancels a name being typed or clears a speed search; with neither, it goes on
@@ -1407,8 +1417,13 @@ fn search_field(query: String, cx: &App) -> impl IntoElement {
                 .border_1()
                 .border_color(c(p.line))
                 .bg(c(p.paper))
-                .text_color(c(p.ink))
-                .child(query),
+                .map(|el| {
+                    if query.is_empty() {
+                        el.text_color(c(p.ignored)).child("Type a name")
+                    } else {
+                        el.text_color(c(p.ink)).child(query)
+                    }
+                }),
         )
 }
 
@@ -1552,6 +1567,9 @@ impl Render for ProjectPanel {
                     this.open_selected(true, cx)
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &SpeedSearch, window, cx| this.start_search(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NewFile, window, cx| this.new_file(window, cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_action(cx.listener(|this, _: &Trash, window, cx| this.trash(window, cx)))

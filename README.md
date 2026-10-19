@@ -86,7 +86,7 @@ The keys follow IntelliJ IDEA.
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
 | | `Enter` | Open the file (or toggle the folder) |
 | | `Space` | Pass through: show the file and stay in the tree |
-| | type letters | Jump to a name |
+| | type letters, `Cmd+F` | Jump to a name |
 | | `Cmd+N`, `Shift+F6`, `Cmd+Backspace` | New file or folder (pick in the popup, `F` / `D`), rename, move to the Trash |
 | | `Esc` | Back to the editor |
 | Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
