@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>subwy, a metro map for your files</title>
+<meta name="description" content="A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust. Walk the tree and the way to your file is drawn as a metro line.">
+<meta property="og:title" content="subwy, a metro map for your files">
+<meta property="og:description" content="A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust. Walk the tree and the way to your file is drawn as a metro line.">
+<meta property="og:image" content="https://jhzlo.github.io/subwy/assets/main-light.png">
+<meta property="og:url" content="https://jhzlo.github.io/subwy/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="subwy">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://jhzlo.github.io/subwy/">
+<meta name="author" content="JHZLO">
+<meta name="theme-color" content="#FBFAF8">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;500;600;700;800;900&family=Overpass+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header id="header" class="header">
+  <div class="header-row">
+    <a id="brand" class="brand" href="#map">
+      <svg width="28" height="28" viewBox="0 0 100 100" aria-hidden="true"><g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><path d="M50 12V88" stroke="#FF7A00"/><path d="M18 76H82" stroke="#F0306E"/><path d="M12 62H36L62 36H82" stroke="#12A150"/></g><circle cx="50" cy="48" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="50" cy="76" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="82" cy="36" r="7" fill="#12A150"/></svg>
+      subwy
+    </a>
+    <nav id="navline" class="navline" aria-label="Sections">
+      <span class="nav-track" aria-hidden="true"></span>
+      <span class="nav-leg" style="left:0%;width:calc(25% * clamp(0, var(--p, 0) - 0, 1));background:#2E6BE6" aria-hidden="true"></span>
+      <span class="nav-leg" style="left:25%;width:calc(25% * clamp(0, var(--p, 0) - 1, 1));background:#12A150" aria-hidden="true"></span>
+      <span class="nav-leg" style="left:50%;width:calc(25% * clamp(0, var(--p, 0) - 2, 1));background:#F0306E" aria-hidden="true"></span>
+      <span class="nav-leg" style="left:75%;width:calc(25% * clamp(0, var(--p, 0) - 3, 1));background:#FF7A00" aria-hidden="true"></span>
+      <a class="navstop" href="#map" style="left:0%"><span class="dot" aria-hidden="true"></span><span class="navlabel">Map</span></a>
+      <a class="navstop" href="#ride" style="left:25%"><span class="dot" aria-hidden="true"></span><span class="navlabel">Ride</span></a>
+      <a class="navstop" href="#window" style="left:50%"><span class="dot" aria-hidden="true"></span><span class="navlabel">Window</span></a>
+      <a class="navstop" href="#timetable" style="left:75%"><span class="dot" aria-hidden="true"></span><span class="navlabel">Timetable</span></a>
+      <a class="navstop" href="#tickets" style="left:100%"><span class="dot" aria-hidden="true"></span><span class="navlabel">Tickets</span></a>
+      <span class="nav-train" aria-hidden="true"></span>
+    </nav>
+    <a class="btn btn-dark btn-small" href="https://github.com/JHZLO/subwy">GitHub</a>
+  </div>
+</header>
+
+<section id="map" class="ride">
+  <span id="ride" class="ride-anchor" aria-hidden="true"></span>
+  <div id="viewport" class="viewport">
+
+    <div id="stage" class="stage">
+      <svg width="1600" height="1000" viewBox="0 0 1600 1000" class="map" aria-hidden="true">
+        <g fill="none" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M-1200 140H200L340 280H640" stroke="#D5EEDE"/>
+          <path d="M-1200 470H200L300 370H700" stroke="#FFE4CF"/>
+          <path d="M-1200 780H120L220 680H740L820 760V2200" stroke="#E6DEFA"/>
+          <path d="M-1200 640H40L160 760H480L560 680V-1200" stroke="#FCDCE6"/>
+          <path d="M1560 -1200V2200" stroke="#E6DEFA"/>
+          <path d="M2800 960H1560" stroke="#D2EFEF"/>
+        </g>
+        <g fill="#FFFFFF" stroke-width="5">
+          <circle cx="200" cy="140" r="10" stroke="#BFE3CB"/><circle cx="640" cy="280" r="10" stroke="#BFE3CB"/>
+          <circle cx="200" cy="470" r="10" stroke="#FBD0B0"/><circle cx="120" cy="780" r="10" stroke="#D3C8F5"/>
+          <circle cx="480" cy="680" r="10" stroke="#D3C8F5"/><circle cx="820" cy="820" r="10" stroke="#D3C8F5"/>
+          <circle cx="160" cy="760" r="10" stroke="#F7C3D3"/><circle cx="560" cy="560" r="10" stroke="#F7C3D3"/>
+          <circle cx="1560" cy="80" r="10" stroke="#D3C8F5"/><circle cx="1560" cy="720" r="10" stroke="#D3C8F5"/>
+        </g>
+        <path d="M940 630H-400" fill="none" stroke="#C9DAF8" stroke-width="22" stroke-linecap="round"/>
+        <g id="base" fill="none" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M940 630V500L1060 380H1340L1460 500V760L1340 880H1060L940 760Z" stroke="#FBFAF8" stroke-width="34"/>
+          <path class="draw" pathLength="1" d="M940 630V500L1060 380H1340L1460 500V760L1340 880H1060L940 760Z" stroke="#2E6BE6" style="animation-delay:.1s"/>
+          <path d="M1000 820L900 920H-400" stroke="#FBFAF8" stroke-width="34"/>
+          <path class="draw" pathLength="1" d="M1000 820L900 920H-400" stroke="#FF7A00" style="animation-delay:.5s"/>
+          <path d="M1400 440L1480 360V-300" stroke="#FBFAF8" stroke-width="34"/>
+          <path class="draw" pathLength="1" d="M1400 440L1480 360V-300" stroke="#7B5BE6" style="animation-delay:.6s"/>
+          <path d="M1200 -300V1300" stroke="#FBFAF8" stroke-width="34"/>
+          <path class="draw" pathLength="1" d="M1200 -300V1300" stroke="#12A150" style="animation-delay:.35s"/>
+          <path d="M-400 300H580L710 170H1900" stroke="#FBFAF8" stroke-width="34"/>
+          <path class="draw" pathLength="1" d="M-400 300H580L710 170H1900" stroke="#F0306E" style="animation-delay:.7s"/>
+        </g>
+        <g fill="none" stroke="#1F2023" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 14" opacity="0.5">
+          <path id="g0" d="M0 0"/><path id="g1" d="M0 0"/><path id="g2" d="M0 0"/>
+        </g>
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="25">
+          <path id="r0" d="M0 0" pathLength="1" style="animation-delay:0s"/>
+          <path id="r1" d="M0 0" pathLength="1" style="animation-delay:.45s"/>
+          <path id="r2" d="M0 0" pathLength="1" style="animation-delay:.9s"/>
+        </g>
+        <g fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="1 30">
+          <path id="f0" class="flow" d="M0 0"/><path id="f1" class="flow" d="M0 0"/><path id="f2" class="flow" d="M0 0"/>
+        </g>
+      </svg>
+    </div>
+
+    <div id="heroCard" class="card">
+      <div class="card-box">
+        <div class="brand-row">
+          <div class="brand-big">
+            <svg width="72" height="72" viewBox="0 0 100 100" class="brand-mark" aria-hidden="true"><g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><path d="M50 12V88" stroke="#FF7A00"/><path d="M18 76H82" stroke="#F0306E"/><path d="M12 62H36L62 36H82" stroke="#12A150"/></g><circle cx="50" cy="48" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="50" cy="76" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="82" cy="36" r="11" fill="#12A150" fill-opacity="0.22"/><circle cx="82" cy="36" r="7" fill="#12A150"/></svg>
+            <h1>subwy</h1>
+          </div>
+          <span class="version wide">v0.1 macOS</span>
+        </div>
+        <div class="board">
+          <div class="board-head">
+            <span class="board-title"><span class="blink live"></span>NEXT STOP</span>
+            <span id="clock" class="clock">00:00:00</span>
+          </div>
+          <div id="tiles" class="tiles" aria-hidden="true"></div>
+          <p id="heroSr" class="sr" aria-live="polite"></p>
+          <div id="trail" class="trail"></div>
+          <div class="board-foot">
+            <span id="stopsText"></span>
+            <span class="board-line"><span id="lineDot" class="line-dot"></span><span id="lineName"></span></span>
+          </div>
+        </div>
+        <p class="lede">A light, fast, keyboard-first text and Markdown editor for macOS, written in Rust. Pick any station on the map and the way there is drawn, the way the file tree draws it.</p>
+        <div class="ctas">
+          <a class="btn btn-dark" href="#tickets">Build from source</a>
+          <a class="btn btn-ghost" href="https://github.com/JHZLO/subwy">View on GitHub</a>
+        </div>
+      </div>
+    </div>
+
+    <div id="stepCard" class="card card-step off">
+      <div id="stepInner" class="card-box">
+        <div class="step-head">
+          <span class="step-count"><span id="stepChip" class="step-chip">1</span><span id="stepCount">STOP 1 OF 4</span></span>
+          <span id="stepDest" class="step-dest"></span>
+        </div>
+        <h2 id="stepTitle" class="step-title"></h2>
+        <p id="stepText" class="step-text"></p>
+        <div id="stepKeys" class="keys"></div>
+        <div class="crop">
+          <img id="crop" src="assets/main-light.png" alt="" width="2560" height="1600">
+        </div>
+      </div>
+    </div>
+
+    <a id="cue" class="cue" href="#ride">RIDE ON<svg class="nudge" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></a>
+  </div>
+</section>
+
+<main class="after">
+  <section id="window" class="section">
+    <div id="riseWindow" class="rise wait">
+      <span class="eyebrow"><span class="eyebrow-bar" style="background:#12A150"></span>PLATFORM VIEW</span>
+      <h2 class="h2">The whole window, one route.</h2>
+      <p class="sub">A sample project in subwy: the tree's line leads to a Markdown file beside its preview, with the terminal below. Pick a stop to light it up.</p>
+    </div>
+    <div class="window-bar">
+      <div id="spots" class="spots">
+        <span class="spots-track" aria-hidden="true"></span>
+      </div>
+      <div class="segs" role="group" aria-label="Theme">
+        <button id="segLight" class="seg" type="button">Light</button>
+        <button id="segDark" class="seg" type="button">Dark</button>
+      </div>
+    </div>
+    <div class="frame-wrap">
+      <div id="frame" class="frame">
+        <img id="shotLight" src="assets/main-light.png" width="2560" height="1600" alt="subwy in light mode with a sample project: the tree's metro line leads to a Markdown file shown beside its preview, with the terminal below">
+        <img id="shotDark" src="assets/main-dark.png" width="2560" height="1600" alt="The same window in dark mode">
+        <span id="spotBox" class="spot-box" aria-hidden="true"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="timetable" class="section">
+    <div id="riseTime" class="rise wait">
+      <span class="eyebrow"><span class="eyebrow-bar" style="background:#F0306E"></span>TIMETABLE</span>
+      <h2 class="h2">Small, quick and quiet.</h2>
+      <p class="sub">Written in Rust and drawn on the GPU, with no web view inside. An editor, not an IDE: no language servers, no plugins.</p>
+    </div>
+    <div class="time-grid">
+      <div class="arrivals">
+        <div class="arrivals-head">
+          <span class="board-title"><span class="blink live"></span>ARRIVALS</span>
+          <span>M1 PRO / MACOS 15.5</span>
+        </div>
+        <div id="times"></div>
+        <p class="arrivals-note">subwy 0.1.0 release build, a small project open with one Markdown file beside its preview and the terminal open. Median of five launches.</p>
+      </div>
+      <div class="watch-card">
+        <span class="label">LAUNCH, IN REAL TIME</span>
+        <div class="watch-row"><span id="watch" class="watch">0.00</span><span class="watch-unit">s</span></div>
+        <div class="watch-track">
+          <span class="watch-rail" aria-hidden="true"></span>
+          <span id="runLine" class="watch-run" aria-hidden="true"></span>
+          <span class="watch-start" aria-hidden="true"></span>
+          <span id="arrive" class="watch-end" aria-hidden="true"></span>
+          <span class="watch-from">Process start</span>
+          <span class="watch-to">First window</span>
+        </div>
+        <p class="watch-note">The line fills at the speed subwy opens its first window. The first launch after a build takes 1.1 s while shaders compile.</p>
+        <button id="depart" class="btn btn-dark" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>Depart</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tickets" class="section section-last">
+    <div id="riseTickets" class="rise wait">
+      <span class="eyebrow"><span class="eyebrow-bar" style="background:#FF7A00"></span>TICKETS</span>
+      <h2 class="h2">Tickets, please.</h2>
+      <p class="sub">There is no download yet. Build it from source: you need macOS and Rust, and the Xcode Command Line Tools are enough.</p>
+    </div>
+    <div id="ticketList" class="tickets"></div>
+    <p class="fine">The app is signed ad hoc, which is enough on the Mac that built it. Finder's Open With and <code>open -a subwy</code> then open folders and files in subwy, a new window per folder.</p>
+  </section>
+
+  <footer id="end" class="footer">
+    <div class="footer-in">
+      <svg viewBox="0 0 1000 40" preserveAspectRatio="none" class="footer-line" aria-hidden="true">
+        <path id="lay" class="lay" pathLength="1" d="M0 20H968" fill="none" stroke="#2E6BE6" stroke-width="10" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="footer-row">
+        <span class="terminus">
+          <svg width="34" height="34" viewBox="0 0 100 100" aria-hidden="true"><g fill="none" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><path d="M50 12V88" stroke="#FF7A00"/><path d="M18 76H82" stroke="#F0306E"/><path d="M12 62H36L62 36H82" stroke="#12A150"/></g><circle cx="50" cy="48" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="50" cy="76" r="7" fill="#FFFFFF" stroke="#1B1D21" stroke-width="3.5"/><circle cx="82" cy="36" r="7" fill="#12A150"/></svg>
+          <span><span class="label">TERMINUS</span><br><span class="terminus-name">subwy</span></span>
+        </span>
+        <span class="footer-links"><a href="https://github.com/JHZLO/subwy">GitHub</a><a href="https://github.com/JHZLO/subwy/blob/main/LICENSE">MIT License</a></span>
+      </div>
+    </div>
+  </footer>
+</main>
+
+<script src="site.js"></script>
+</body>
+</html>
