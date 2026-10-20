@@ -250,6 +250,12 @@ fn editor_page(cx: &App) -> SettingPage {
                 |s| s.folding,
                 |s, on| s.folding = on,
             ),
+            switch(
+                "Outline",
+                "A Markdown file's headings as stations on a line beside the text.",
+                |s| s.outline,
+                |s, on| s.outline = on,
+            ),
         ]),
     ])
 }

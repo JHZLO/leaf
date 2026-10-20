@@ -243,6 +243,186 @@ impl EditorTabs {
         cx.notify();
     }
 
+    /// The outline of a Markdown tab with two headings or more: each heading a station on the
+    /// file's line, the section holding the cursor marked, the way to it drawn in the line's color.
+    /// A click on a station puts the cursor on its heading.
+    fn render_outline(&self, tab: &Tab, cx: &mut Context<Self>) -> Option<AnyElement> {
+        const ROW: f32 = 30.;
+        const COLUMN: f32 = 24.;
+        let p = theme::colors(cx);
+        let state = tab.editor.read(cx);
+        let text = state.value();
+        let headings = markdown::outline(&text);
+        if headings.len() < 2 {
+            return None;
+        }
+        let cursor = state.cursor_position().line;
+        let lines = text.lines().count().max(1) as u32;
+        let current = markdown::section_at(&headings, cursor);
+        let line_color = c(self.station_color(&tab.path, p));
+        let last = headings.len() - 1;
+        let reached = current.unwrap_or(0);
+        let rows = headings.into_iter().enumerate().map(|(index, heading)| {
+            let here = Some(index) == current;
+            let passed = current.is_some_and(|at| index <= at);
+            let size = match (here, heading.level) {
+                (true, _) => 15.,
+                (false, 1) => 14.,
+                (false, 2) => 9.,
+                (false, _) => 5.,
+            };
+            let station = div()
+                .absolute()
+                .left(z(COLUMN - size / 2., cx))
+                .top(z((ROW - size) / 2., cx))
+                .size(z(size, cx))
+                .rounded_full()
+                .map(|el| match (here, heading.level, passed) {
+                    (true, ..) => el.bg(line_color).shadow(vec![BoxShadow {
+                        color: line_color.opacity(0.22),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: z(4., cx),
+                        inset: false,
+                    }]),
+                    // A top heading is a transfer station, as a folder is in the tree.
+                    (false, 1, _) => el.bg(c(p.paper)).border(z(2.5, cx)).border_color(c(p.ink)),
+                    (false, 2, true) => el.bg(line_color),
+                    (false, 2, false) => el
+                        .bg(c(p.paper))
+                        .border(z(2., cx))
+                        .border_color(c(p.ignored)),
+                    (false, _, true) => el.bg(c(p.sub)),
+                    (false, _, false) => el.bg(c(p.ignored)),
+                });
+            let editor = tab.editor.clone();
+            let line = heading.line;
+            div()
+                .id(("outline", index))
+                .relative()
+                .h(z(ROW, cx))
+                .flex()
+                .items_center()
+                .gap(z(8., cx))
+                .pl(z(COLUMN * 2. - 4., cx))
+                .pr(z(10., cx))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_size(z(
+                    if heading.level <= 2 {
+                        size::UI_TEXT
+                    } else {
+                        12.
+                    },
+                    cx,
+                ))
+                .text_color(c(match (here, heading.level, passed) {
+                    (true, ..) => p.ink,
+                    (false, 1, _) => p.ink,
+                    (false, 2, _) => p.sub,
+                    (false, _, true) => p.sub,
+                    (false, _, false) => p.ignored,
+                }))
+                .when(here || heading.level == 1, |el| {
+                    el.font_weight(FontWeight::SEMIBOLD)
+                })
+                .hover(|style| style.bg(c(p.hover)))
+                .child(station)
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(heading.title),
+                )
+                .when(here, |el| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .text_size(z(11., cx))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(c(p.sub))
+                            .child("You are here"),
+                    )
+                })
+                .when(index == last && !here, |el| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .text_size(z(11., cx))
+                            .font_weight(FontWeight::NORMAL)
+                            .text_color(c(p.ignored))
+                            .child("Last stop"),
+                    )
+                })
+                .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
+                    editor.update(cx, |state, cx| {
+                        state.set_cursor_position(Position::new(line, 0), window, cx)
+                    });
+                    editor.read(cx).focus_handle(cx).focus(window, cx);
+                }))
+        });
+        let rows: Vec<_> = rows.collect();
+        Some(
+            div()
+                .w(z(230., cx))
+                .flex_none()
+                .h_full()
+                .flex()
+                .flex_col()
+                .border_l_1()
+                .border_color(c(p.line))
+                .child(
+                    div()
+                        .h(z(34., cx))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(z(14., cx))
+                        .text_size(z(11., cx))
+                        .text_color(c(p.sub))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child("OUTLINE"))
+                        .child(format!("{}%", (cursor + 1).min(lines) * 100 / lines)),
+                )
+                .child(
+                    div()
+                        .id("outline-stations")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(
+                            div()
+                                .relative()
+                                // The line from the first station to the last: the way to the
+                                // section in the file's color, the rest still to go.
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(z(COLUMN - 1.5, cx))
+                                        .top(z(ROW / 2., cx))
+                                        .w(z(3., cx))
+                                        .h(z(ROW * last as f32, cx))
+                                        .rounded(z(1.5, cx))
+                                        .bg(c(p.guide)),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(z(COLUMN - 1.5, cx))
+                                        .top(z(ROW / 2., cx))
+                                        .w(z(3., cx))
+                                        .h(z(ROW * reached as f32, cx))
+                                        .rounded(z(1.5, cx))
+                                        .bg(line_color),
+                                )
+                                .children(rows),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The color of the route line that reaches `path` in the tree, so a file's tab and its
     /// station agree. The open folder is depth 0; with several folders, each folder's row is.
     fn station_color(&self, path: &Path, p: &Palette) -> u32 {
@@ -485,6 +665,8 @@ impl EditorTabs {
                     if lines != this.last_lines {
                         this.last_lines = lines;
                         cx.emit(TabsChanged);
+                        // The outline's station follows the cursor's line.
+                        cx.notify();
                     }
                 }
             }),
@@ -1446,6 +1628,16 @@ impl Render for EditorTabs {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(z(theme::editor_text(cx), cx));
                 if tab.is_markdown() {
+                    // The outline beside the text, in the editor view only: the preview shows the
+                    // text itself.
+                    let outline = (crate::settings(cx).outline && self.preview.is_none())
+                        .then(|| self.render_outline(tab, cx))
+                        .flatten();
+                    let editor = div()
+                        .size_full()
+                        .flex()
+                        .child(div().flex_1().min_w_0().h_full().child(editor))
+                        .children(outline);
                     // The full width, as code and as IntelliJ shows Markdown (the user asked for it
                     // over a centered reading-width page), with the Markdown editing keys.
                     body.key_context(MARKDOWN)

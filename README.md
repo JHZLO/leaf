@@ -99,7 +99,7 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 | | `Cmd+Alt+R` | Reveal in Finder |
 | | `Cmd+S`, `Cmd+W` | Save, close the tab |
 | | `Cmd+Shift+[` / `]` | Previous / next tab |
-| | `Cmd+Shift+V` | Markdown preview beside the editor (the buttons at the tab bar's right also show the preview alone; drag the line between them) |
+| | `Cmd+Shift+V` | Markdown preview beside the editor (in the editor alone, an outline at the right shows the headings as stations on a line; click one to go there) (the buttons at the tab bar's right also show the preview alone; drag the line between them) |
 | | `Cmd+=`, `Cmd+-`, `Cmd+0` | Zoom in, out, back to 100% |
 | | `Alt+F12` | Focus the terminal, which opens with the folder (in the terminal: hide it, the shell keeps running) |
 | | `Cmd+T` | New terminal tab |
@@ -139,6 +139,7 @@ first run; changes made to it by hand apply the next time subwy starts.
   "show_whitespace": false,
   "indent_guides": true,
   "folding": true,
+  "outline": true,
   "appearance": "system",
   "key_hints": true,
   "show_ignored": true,

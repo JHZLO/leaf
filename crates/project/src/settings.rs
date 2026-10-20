@@ -27,6 +27,8 @@ pub struct Settings {
     pub indent_guides: bool,
     /// Code blocks fold from the gutter.
     pub folding: bool,
+    /// A Markdown file's headings as stations on a line beside the text.
+    pub outline: bool,
     /// Light, dark, or as macOS is set.
     pub appearance: Appearance,
     /// The key hint line under the tree.
@@ -208,6 +210,7 @@ impl Default for Settings {
             show_whitespace: false,
             indent_guides: true,
             folding: true,
+            outline: true,
             appearance: Appearance::System,
             key_hints: true,
             show_ignored: true,

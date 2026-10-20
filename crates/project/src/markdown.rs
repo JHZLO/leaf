@@ -13,6 +13,72 @@ pub struct Edit {
     pub selection: Range<usize>,
 }
 
+/// A Markdown heading: its line (zero-based), how deep it is (1 for `#`), and its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Heading {
+    pub line: u32,
+    pub level: u8,
+    pub title: String,
+}
+
+/// The `#` headings of a Markdown text, top to bottom: the outline rail's stations. Lines inside
+/// fenced code blocks (``` or ~~~) are code, not headings. Underlined (setext) headings are left out.
+pub fn outline(text: &str) -> Vec<Heading> {
+    let mut headings = Vec::new();
+    // The open fence's character and length, while inside a code block.
+    let mut fence: Option<(char, usize)> = None;
+    for (number, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start_matches(' ');
+        if line.len() - trimmed.len() > 3 {
+            continue;
+        }
+        if let Some(mark @ ('`' | '~')) = trimmed.chars().next() {
+            let run = trimmed.chars().take_while(|&ch| ch == mark).count();
+            if run >= 3 {
+                match fence {
+                    None => fence = Some((mark, run)),
+                    Some((open, length))
+                        if open == mark && run >= length && trimmed[run..].trim().is_empty() =>
+                    {
+                        fence = None
+                    }
+                    Some(_) => {}
+                }
+                continue;
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        let level = trimmed.chars().take_while(|&ch| ch == '#').count();
+        let rest = &trimmed[level..];
+        if !(1..=6).contains(&level) || !(rest.is_empty() || rest.starts_with([' ', '\t'])) {
+            continue;
+        }
+        // A closing run of `#` goes when a space comes before it: `## C#` keeps its `#`.
+        let text = rest.trim();
+        let open = text.trim_end_matches('#');
+        let title = if open.is_empty() || open.ends_with([' ', '\t']) {
+            open.trim_end()
+        } else {
+            text
+        };
+        if !title.is_empty() {
+            headings.push(Heading {
+                line: number as u32,
+                level: level as u8,
+                title: title.to_string(),
+            });
+        }
+    }
+    headings
+}
+
+/// The heading whose section holds `line` (zero-based): the last one at or above it.
+pub fn section_at(headings: &[Heading], line: u32) -> Option<usize> {
+    headings.iter().rposition(|heading| heading.line <= line)
+}
+
 /// A list item or quote line, split where its text starts.
 struct Item<'a> {
     indent: &'a str,
@@ -427,5 +493,44 @@ mod tests {
         // A second press takes the empty pair out again.
         assert_eq!(toggle("a **|** b", Emphasis::Bold), "a | b");
         assert_eq!(toggle("a *|* b", Emphasis::Italic), "a | b");
+    }
+
+    fn titles(text: &str) -> Vec<(u32, u8, String)> {
+        outline(text)
+            .into_iter()
+            .map(|h| (h.line, h.level, h.title))
+            .collect()
+    }
+
+    #[test]
+    fn headings_are_the_hash_lines() {
+        let text =
+            "# Keys\n\nText\n## Tree ##\n### C#\n#hashtag\n    # indented code\n####### seven\n";
+        assert_eq!(
+            titles(text),
+            [
+                (0, 1, "Keys".to_string()),
+                (3, 2, "Tree".to_string()),
+                (4, 3, "C#".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fenced_code_holds_no_headings() {
+        let text = "# One\n```sh\n# a shell comment\n```\n~~~~\n# still code\n~~~\n# also code\n~~~~\n## Two\n";
+        assert_eq!(
+            titles(text),
+            [(0, 1, "One".to_string()), (9, 2, "Two".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_line_belongs_to_the_heading_above_it() {
+        let headings = outline("intro\n# A\ntext\n## B\nmore\n");
+        assert_eq!(section_at(&headings, 0), None);
+        assert_eq!(section_at(&headings, 1), Some(0));
+        assert_eq!(section_at(&headings, 2), Some(0));
+        assert_eq!(section_at(&headings, 4), Some(1));
     }
 }
