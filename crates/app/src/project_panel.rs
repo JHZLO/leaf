@@ -276,6 +276,8 @@ pub struct ProjectPanel {
     route: route::Motion,
     /// The row under the pointer: it gets a background and a dashed way to it off the route.
     hovered: Option<PathBuf>,
+    /// Where a drag over the tree would drop, drawn as the hovered row is.
+    drop_target: Option<PathBuf>,
 }
 
 /// A name being typed into the tree, in an input on its own line.
@@ -340,6 +342,54 @@ struct EditView {
 /// What the gap right of the tree drags; the panel resizes as it moves.
 pub struct ResizeDrag;
 
+/// Rows being dragged, on disk. The tree takes them to a folder; the editor opens them and the
+/// terminal types their paths.
+pub struct DraggedItems {
+    pub paths: Vec<PathBuf>,
+}
+
+/// What follows the pointer while rows are dragged: the name, or how many items.
+struct DragPreview {
+    label: SharedString,
+    /// Where the row was grabbed. GPUI puts the view's corner that far from the pointer, so the
+    /// view pads by it to show the label beside the pointer instead of over the row below.
+    grab: Point<Pixels>,
+}
+
+impl DragPreview {
+    fn new(paths: &[PathBuf], grab: Point<Pixels>) -> Self {
+        let label = match paths {
+            [one] => file_name(one),
+            many => format!("{} items", many.len()),
+        };
+        Self {
+            label: label.into(),
+            grab,
+        }
+    }
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = theme::colors(cx);
+        div()
+            .pl(self.grab.x + z(12., cx))
+            .pt(self.grab.y + z(12., cx))
+            .child(
+                div()
+                    .px(z(8., cx))
+                    .py(z(2., cx))
+                    .rounded(z(4., cx))
+                    .border_1()
+                    .border_color(c(p.line))
+                    .bg(c(p.paper))
+                    .text_size(z(size::UI_TEXT, cx))
+                    .text_color(c(p.ink))
+                    .child(self.label.clone()),
+            )
+    }
+}
+
 impl EventEmitter<PanelEvent> for ProjectPanel {}
 impl EventEmitter<FileEvent> for ProjectPanel {}
 
@@ -370,6 +420,7 @@ impl ProjectPanel {
             menu: None,
             route: route::Motion::default(),
             hovered: None,
+            drop_target: None,
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -705,8 +756,37 @@ impl ProjectPanel {
         };
         self.search = None;
         let dir = self.target_dir(cx);
-        let Some(dir_abs) = self.folders.absolute(&dir) else {
-            return;
+        let landing = self.put_into(sources, &dir, cut, "pasted", window, cx);
+        cx.spawn(async move |_, cx| {
+            let landed = landing.await;
+            // Moved once: the clipboard keeps the new paths as plain text, so a second Cmd+V does
+            // not try to move them again.
+            if cut && !landed.is_empty() {
+                let text = landed
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
+            }
+        })
+        .detach();
+    }
+
+    /// Copies or, with `cut`, moves `sources` (on disk) into the tree's folder `dir`, off the main
+    /// thread, then shows them there. A copy whose name is taken gets Finder's `name copy`; a move
+    /// never replaces anything. Resolves to where they landed.
+    fn put_into(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dir: &Path,
+        cut: bool,
+        verb: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Vec<PathBuf>> {
+        let Some(dir) = self.folders.absolute(dir) else {
+            return Task::ready(Vec::new());
         };
         let work = cx.background_executor().spawn(async move {
             sources
@@ -717,14 +797,14 @@ impl ProjectPanel {
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
                     let result = if cut {
-                        fs::move_into(&from, &dir_abs, &name)
+                        fs::move_into(&from, &dir, &name)
                     } else {
                         let kind = if from.is_dir() {
                             EntryKind::Dir
                         } else {
                             EntryKind::File
                         };
-                        fs::copy_into(&from, &dir_abs, &fs::free_name(&dir_abs, &name, kind))
+                        fs::copy_into(&from, &dir, &fs::free_name(&dir, &name, kind))
                     };
                     (from, result)
                 })
@@ -732,21 +812,70 @@ impl ProjectPanel {
         });
         cx.spawn_in(window, async move |this, cx| {
             let results = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                let landed = this.arrived(cut, results, "pasted", window, cx);
-                // Moved once: the clipboard keeps the new paths as plain text, so a second Cmd+V
-                // does not try to move them again.
-                if cut && !landed.is_empty() {
-                    let text = landed
-                        .iter()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            });
+            this.update_in(cx, |this, window, cx| {
+                this.arrived(cut, results, verb, window, cx)
+            })
+            .unwrap_or_default()
         })
-        .detach();
+    }
+
+    /// The folder a drop at `position` would go into: the folder of the row there (a file's own
+    /// folder), or the open folder below the last row. `lines` are the list's lines' folders.
+    fn drop_line(
+        &self,
+        bounds: Bounds<Pixels>,
+        position: Point<Pixels>,
+        lines: &[Option<PathBuf>],
+        cx: &App,
+    ) -> Option<PathBuf> {
+        if !bounds.contains(&position) {
+            return None;
+        }
+        let offset = self.scroll.0.borrow().base_handle.offset();
+        let row = z(size::TREE_ROW, cx);
+        let line = ((position.y - bounds.top() - offset.y) / row).floor();
+        if line < 0. {
+            return None;
+        }
+        match lines.get(line as usize) {
+            Some(folder) => folder.clone(),
+            // A window of several folders has no folder of its own to take it.
+            None => (!self.folders.several()).then(PathBuf::new),
+        }
+    }
+
+    /// A drag over the tree aims at `target`, unless the dragged items hold it. The way to it is
+    /// drawn as the hovered row's is.
+    fn drag_over(&mut self, target: Option<PathBuf>, dragged: &[PathBuf], cx: &mut Context<Self>) {
+        let target = target.filter(|dir| {
+            self.folders
+                .absolute(dir)
+                .is_some_and(|abs| !dragged.iter().any(|item| abs.starts_with(item)))
+        });
+        if self.drop_target != target {
+            self.drop_target = target;
+            cx.notify();
+        }
+    }
+
+    /// Rows dropped on the tree move to the folder under the pointer; with Option held they are
+    /// copied (Finder's way). Files from Finder are always copied in.
+    fn drop_items(
+        &mut self,
+        sources: Vec<PathBuf>,
+        cut: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dir) = self.drop_target.take() else {
+            return;
+        };
+        if self.edit.is_some() {
+            return;
+        }
+        self.focus_handle.focus(window, cx);
+        let verb = if cut { "moved" } else { "copied" };
+        self.put_into(sources, &dir, cut, verb, window, cx).detach();
     }
 
     /// Shows items a paste, F5 or F6 put somewhere, selected; moved items take their open tabs
@@ -2268,11 +2397,16 @@ impl Render for ProjectPanel {
             Some(EditTarget::New { dir, .. }) => Some(dir.clone()),
             _ => None,
         };
+        // A drag that ended anywhere leaves no target behind.
+        if !cx.has_active_drag() {
+            self.drop_target = None;
+        }
         let hovered = match &new_dir {
             Some(dir) => tree::route(&rows, dir),
             None => self
-                .hovered
+                .drop_target
                 .as_deref()
+                .or(self.hovered.as_deref())
                 .map_or_else(Vec::new, |h| tree::route(&rows, h)),
         };
         // How many shown rows the speed search matches, and which of them is selected.
@@ -2293,7 +2427,26 @@ impl Render for ProjectPanel {
             });
         // The other selected rows, by list line: they wear the selection without the route.
         let chosen = self.tree.selection(&rows);
+        // What a drag from a selected row carries: the selection, without the window's folders.
+        let chosen_abs: Vec<PathBuf> = tree::outermost(&chosen)
+            .iter()
+            .filter(|p| !p.as_os_str().is_empty() && !self.folders.is_folder(p))
+            .filter_map(|p| self.folders.absolute(p))
+            .collect();
         let items = self.items(rows);
+        // Each list line's folder, where a drop on it goes.
+        let drop_lines: Vec<Option<PathBuf>> = items
+            .iter()
+            .map(|item| match item {
+                Item::Row(row) if row.kind == EntryKind::Dir && !row.loops => {
+                    Some(row.path.clone())
+                }
+                Item::Row(row) => {
+                    Some(row.path.parent().map(Path::to_path_buf).unwrap_or_default())
+                }
+                Item::New { .. } => None,
+            })
+            .collect();
         let count = items.len();
         let marked: Vec<(usize, usize)> = items
             .iter()
@@ -2502,6 +2655,29 @@ impl Render for ProjectPanel {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .on_drag_move(cx.listener({
+                        let lines = drop_lines.clone();
+                        move |this, event: &DragMoveEvent<DraggedItems>, _, cx| {
+                            let target =
+                                this.drop_line(event.bounds, event.event.position, &lines, cx);
+                            let dragged = event.drag(cx).paths.clone();
+                            this.drag_over(target, &dragged, cx);
+                        }
+                    }))
+                    .on_drag_move(cx.listener(
+                        move |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                            let target =
+                                this.drop_line(event.bounds, event.event.position, &drop_lines, cx);
+                            this.drag_over(target, &[], cx);
+                        },
+                    ))
+                    .on_drop(cx.listener(|this, items: &DraggedItems, window, cx| {
+                        let cut = !window.modifiers().alt;
+                        this.drop_items(items.paths.clone(), cut, window, cx);
+                    }))
+                    .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                        this.drop_items(paths.paths().to_vec(), false, window, cx);
+                    }))
                     .child(route_layer)
                     .child(
                         uniform_list("project-tree", count, {
@@ -2524,6 +2700,7 @@ impl Render for ProjectPanel {
                                 Some(Menu::New { choice, .. }) => Some(*choice),
                                 _ => None,
                             };
+                            let folders = self.folders.clone();
                             let context_menu = match &self.menu {
                                 Some(Menu::Context {
                                     path,
@@ -2561,6 +2738,17 @@ impl Render for ProjectPanel {
                                                 selected.as_deref() == Some(row.path.as_path());
                                             let is_chosen =
                                                 is_selected || chosen.contains(&row.path);
+                                            // A drag takes the selection when it starts on it,
+                                            // else this row; the window's folders stay put.
+                                            let own = row.path.as_os_str().is_empty()
+                                                || folders.is_folder(&row.path);
+                                            let dragged = if own {
+                                                None
+                                            } else if is_chosen && !chosen_abs.is_empty() {
+                                                Some(chosen_abs.clone())
+                                            } else {
+                                                folders.absolute(&row.path).map(|abs| vec![abs])
+                                            };
                                             let popup =
                                                 new_choice.filter(|_| is_selected).map(|choice| {
                                                     new_popup(row.depth, choice, panel.clone(), cx)
@@ -2594,6 +2782,16 @@ impl Render for ProjectPanel {
                                             )
                                             .children(popup)
                                             .children(context_popup)
+                                            .when_some(dragged, |el, paths| {
+                                                el.on_drag(
+                                                    DraggedItems { paths },
+                                                    |items, grab, _, cx| {
+                                                        cx.new(|_| {
+                                                            DragPreview::new(&items.paths, grab)
+                                                        })
+                                                    },
+                                                )
+                                            })
                                             .on_mouse_down(MouseButton::Right, {
                                                 let (panel, path) =
                                                     (panel.clone(), row.path.clone());

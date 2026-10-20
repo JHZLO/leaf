@@ -102,6 +102,13 @@ impl TerminalTabs {
         })
     }
 
+    /// Pastes `text` into the tab in front.
+    pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            tab.view.update(cx, |panel, cx| panel.paste_text(text, cx));
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.tabs.len()
     }

@@ -95,7 +95,11 @@ pub fn run(check: &mut Check) {
 }
 
 /// The shell answers on its own thread; give it up to five seconds.
-fn wait_for(check: &mut Check, window: AnyWindowHandle, found: impl Fn(&[String]) -> bool) -> bool {
+pub fn wait_for(
+    check: &mut Check,
+    window: AnyWindowHandle,
+    found: impl Fn(&[String]) -> bool,
+) -> bool {
     wait_for_workspace(check, window, |w, cx| {
         w.terminal_lines(cx).is_some_and(|lines| {
             let lines: Vec<String> = lines.iter().map(|l| l.trim_end().to_string()).collect();

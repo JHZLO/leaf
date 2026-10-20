@@ -357,6 +357,29 @@ pub fn encode_key(key: &str, mods: Mods, mode: TermMode) -> Option<Vec<u8>> {
 /// A paste as the shell should receive it. In bracketed paste mode the text is wrapped so the
 /// shell does not run it line by line, with escape characters removed so it cannot end the
 /// bracket early; otherwise line breaks become the carriage returns a key press sends.
+/// Paths as a shell reads them back, a word each and a space after: what Terminal.app types when
+/// files are dropped on it. A path is quoted when a character in it would mean something to the
+/// shell (a space, a quote, `~`, letters outside ASCII).
+pub fn shell_words(paths: &[std::path::PathBuf]) -> String {
+    let mut out = String::new();
+    for path in paths {
+        let text = path.to_string_lossy();
+        let plain = !text.is_empty()
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "/._-+,:@%=".contains(ch));
+        if plain {
+            out.push_str(&text);
+        } else {
+            out.push('\'');
+            out.push_str(&text.replace('\'', "'\\''"));
+            out.push('\'');
+        }
+        out.push(' ');
+    }
+    out
+}
+
 pub fn paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
     if mode.contains(TermMode::BRACKETED_PASTE) {
         let mut out = b"\x1b[200~".to_vec();
@@ -835,5 +858,22 @@ mod tests {
             .to_string();
         let frame = shell.frame(&palette());
         assert_eq!(texts(&frame)[0], [format!("in {name}").as_str()]);
+    }
+
+    #[test]
+    fn dropped_paths_are_typed_as_shell_words() {
+        let paths: Vec<std::path::PathBuf> = [
+            "/work/docs/a.md",
+            "/work/My Notes/b.md",
+            "/work/it's.md",
+            "/work/한글.md",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        assert_eq!(
+            shell_words(&paths),
+            "/work/docs/a.md '/work/My Notes/b.md' '/work/it'\\''s.md' '/work/한글.md' "
+        );
     }
 }

@@ -214,10 +214,15 @@ impl TerminalPanel {
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.shell
-                .input(terminal::paste_bytes(&text, self.shell.mode()));
-            cx.notify();
+            self.paste_text(&text, cx);
         }
+    }
+
+    /// Hands `text` to the shell as a paste (bracketed when the shell asks for it).
+    pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.shell
+            .input(terminal::paste_bytes(text, self.shell.mode()));
+        cx.notify();
     }
 
     /// The screen cell under `position`, and which half of it.

@@ -19,7 +19,7 @@ use crate::{
         SelectPrev, ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn,
         ZoomOut, ZoomReset,
     },
-    project_panel::{FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
+    project_panel::{DraggedItems, FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     terminal_tabs::{TerminalTabs, TerminalTabsEvent},
@@ -606,6 +606,43 @@ impl Workspace {
             let _ = this.update_in(cx, |this, window, cx| this.add_folder(root, window, cx));
         })
         .detach();
+    }
+
+    /// Items dropped on the editor open: files from the tree or from Finder. Something from
+    /// outside the window's folders opens as Finder would open it in subwy (`open_path`).
+    fn drop_on_editor(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let folders = self.folders(cx);
+        for path in paths {
+            match folders.as_ref().and_then(|folders| folders.relative(path)) {
+                Some(rel) if path.is_file() => self
+                    .tabs
+                    .update(cx, |tabs, cx| tabs.open(&rel, false, window, cx)),
+                // A folder of this window: nothing to open.
+                Some(_) => {}
+                None => {
+                    // Other windows read this one while opening; let this update end first.
+                    let path = path.clone();
+                    cx.defer(move |cx| {
+                        open_path(&path, cx);
+                    });
+                }
+            }
+        }
+        if self.panel.is_some() {
+            self.focus_editor_area(window, cx);
+        }
+    }
+
+    /// Items dropped on the terminal: their paths are typed at the prompt, as Terminal.app does.
+    fn drop_on_terminal(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = &self.terminal else {
+            return;
+        };
+        let words = subwy_project::terminal::shell_words(paths);
+        terminal
+            .view
+            .update(cx, |tabs, cx| tabs.paste_text(&words, cx));
+        self.focus_terminal(window, cx);
     }
 
     /// Opens `file`, an absolute path inside one of the window's folders, in a tab.
@@ -1447,6 +1484,16 @@ impl Render for Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .flex()
+                                    .on_drop(cx.listener(
+                                        |this, items: &DraggedItems, window, cx| {
+                                            this.drop_on_editor(&items.paths, window, cx)
+                                        },
+                                    ))
+                                    .on_drop(cx.listener(
+                                        |this, paths: &ExternalPaths, window, cx| {
+                                            this.drop_on_editor(paths.paths(), window, cx)
+                                        },
+                                    ))
                                     .map(|el| match self.panel {
                                         Some(_) => el.child(self.tabs.clone()),
                                         None => {
@@ -1502,6 +1549,16 @@ impl Render for Workspace {
                                             this.terminal_height =
                                                 height.clamp(size::TERMINAL_MIN, most);
                                             cx.notify();
+                                        },
+                                    ))
+                                    .on_drop(cx.listener(
+                                        |this, items: &DraggedItems, window, cx| {
+                                            this.drop_on_terminal(&items.paths, window, cx)
+                                        },
+                                    ))
+                                    .on_drop(cx.listener(
+                                        |this, paths: &ExternalPaths, window, cx| {
+                                            this.drop_on_terminal(paths.paths(), window, cx)
                                         },
                                     ))
                                     .child(terminal.view.clone())

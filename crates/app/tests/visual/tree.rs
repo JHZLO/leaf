@@ -21,6 +21,7 @@ pub fn run(check: &mut Check) {
     several(check);
     clipboard(check);
     copy_move(check);
+    drag_and_drop(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -406,6 +407,132 @@ fn copy_move(check: &mut Check) {
         fixture.path().join("src/README.md").is_file(),
     );
     check.expect_eq("f6 moves several items into a folder", moved, (true, true));
+}
+
+/// Rows dragged onto a folder move there (Option copies); files from Finder are copied in; rows
+/// dropped on the editor open and on the terminal are typed as paths.
+fn drag_and_drop(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    let none = gpui_kit::Modifiers::default();
+    // Rows: the folder, docs, src, target, .gitignore, README.md.
+    drag(
+        check,
+        window,
+        (100., row_y(5)),
+        (100., row_y(1)),
+        none,
+        Some("tree-14-drag"),
+    );
+    let moved = (
+        fixture.path().join("README.md").exists(),
+        fixture.path().join("docs/README.md").is_file(),
+    );
+    check.expect_eq(
+        "a row dropped on a folder moves there",
+        moved,
+        (false, true),
+    );
+    // Rows now: the folder, docs, guide, notes.md, README.md, src, target, .gitignore.
+    let option = gpui_kit::Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    drag(
+        check,
+        window,
+        (100., row_y(7)),
+        (100., row_y(5)),
+        option,
+        None,
+    );
+    let copied = (
+        fixture.path().join(".gitignore").is_file(),
+        fixture.path().join("src/.gitignore").is_file(),
+    );
+    check.expect_eq("option-drop copies", copied, (true, true));
+    // A file from Finder, dropped on a file's row, lands in that file's folder.
+    let outside = tempfile::tempdir().expect("temp dir");
+    let photo = outside.path().join("photo.txt");
+    std::fs::write(&photo, "from finder\n").expect("write");
+    drop_from_finder(check, window, &photo, (100., row_y(3)));
+    check.expect_eq(
+        "a file from Finder is copied into the folder under the pointer",
+        std::fs::read_to_string(fixture.path().join("docs/photo.txt")).ok(),
+        Some("from finder\n".into()),
+    );
+    check.expect_eq("the Finder original stays", photo.is_file(), true);
+    // Rows: the folder, docs, guide, notes.md, photo.txt, README.md, src, ... Drop notes.md on
+    // the editor: it opens.
+    drag(check, window, (100., row_y(3)), (700., 300.), none, None);
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "a row dropped on the editor opens",
+        active,
+        Some(PathBuf::from("docs/notes.md")),
+    );
+    // And on the terminal its path is typed.
+    drag(check, window, (100., row_y(3)), (700., 650.), none, None);
+    let typed = crate::terminal::wait_for(check, window, |lines| {
+        lines.iter().any(|line| line.contains("docs/notes.md"))
+    });
+    check.expect_eq("a row dropped on the terminal types its path", typed, true);
+    check.shot(window, "tree-15-dropped");
+}
+
+/// Presses on `from`, moves past the drag threshold and on to `to`, and lets go there; `shot`
+/// names a screenshot taken just before letting go.
+fn drag(
+    check: &mut Check,
+    window: AnyWindowHandle,
+    from: (f32, f32),
+    to: (f32, f32),
+    modifiers: gpui_kit::Modifiers,
+    shot: Option<&str>,
+) {
+    use gpui_kit::{MouseButton, point, px};
+    let none = gpui_kit::Modifiers::default();
+    let start = point(px(from.0), px(from.1));
+    let end = point(px(to.0), px(to.1));
+    check
+        .cx
+        .simulate_mouse_down(window, start, MouseButton::Left, none);
+    let nudge = point(px(from.0 + 8.), px(from.1 + 8.));
+    check
+        .cx
+        .simulate_mouse_move(window, nudge, MouseButton::Left, none);
+    check
+        .cx
+        .simulate_mouse_move(window, end, MouseButton::Left, modifiers);
+    if let Some(name) = shot {
+        check.shot(window, name);
+    }
+    check
+        .cx
+        .simulate_mouse_up(window, end, MouseButton::Left, modifiers);
+    check.cx.run_until_parked();
+    // The copy or move runs off the main thread.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    check.cx.run_until_parked();
+}
+
+/// A file dragged in from Finder and dropped at `at`.
+fn drop_from_finder(check: &mut Check, window: AnyWindowHandle, file: &Path, at: (f32, f32)) {
+    use gpui_kit::{ExternalPaths, FileDropEvent, point, px};
+    let position = point(px(at.0), px(at.1));
+    let paths = ExternalPaths(vec![file.to_path_buf()].into());
+    check
+        .cx
+        .simulate_event(window, FileDropEvent::Entered { position, paths });
+    check
+        .cx
+        .simulate_event(window, FileDropEvent::Pending { position });
+    check
+        .cx
+        .simulate_event(window, FileDropEvent::Submit { position });
+    check.cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    check.cx.run_until_parked();
 }
 
 fn click_with(
