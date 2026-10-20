@@ -39,6 +39,9 @@ enum OverlayView {
     Search(Entity<SearchPanel>),
 }
 
+/// The items a copy action copies, relative to the window, and the editor's selected lines.
+type CopySource = (Vec<PathBuf>, Option<(u32, u32)>);
+
 /// What the gap above the terminal drags; the terminal resizes as it moves.
 struct TerminalResize;
 
@@ -796,6 +799,12 @@ impl Workspace {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
     }
 
+    /// Every tab's file, in tab order; for the UI checks.
+    pub fn open_files(&self, cx: &App) -> Vec<PathBuf> {
+        let (tabs, _) = self.tabs.read(cx).session_tabs(cx);
+        tabs.into_iter().map(|tab| tab.path).collect()
+    }
+
     /// The window's first folder, if any.
     pub fn root(&self, cx: &App) -> Option<PathBuf> {
         self.folders(cx)
@@ -1087,15 +1096,16 @@ impl Workspace {
         handle.focus(window, cx);
     }
 
-    /// What the copy actions copy: the tree selection when the tree has focus, else the active file.
-    fn copy_source(&self, window: &Window, cx: &App) -> Option<(PathBuf, Option<(u32, u32)>)> {
+    /// What the copy actions copy: the tree's selection, top to bottom, when the tree has focus;
+    /// else the active file and its selected lines.
+    fn copy_source(&self, window: &Window, cx: &App) -> Option<CopySource> {
         if self.tree_focused(window, cx) {
-            let panel = self.panel.as_ref()?.read(cx);
-            return panel.selected().map(|p| (p.to_path_buf(), None));
+            let selection = self.panel.as_ref()?.read(cx).selection();
+            return (!selection.is_empty()).then_some((selection, None));
         }
         let tabs = self.tabs.read(cx);
         let tab = tabs.active_tab()?;
-        Some((tab.path.clone(), tabs.active_lines(cx)))
+        Some((vec![tab.path.clone()], tabs.active_lines(cx)))
     }
 
     fn copy(&mut self, text: String, label: &'static str, cx: &mut Context<Self>) {
@@ -1119,15 +1129,24 @@ impl Workspace {
     }
 
     fn copy_path(&mut self, _: &CopyPath, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(folders), Some((rel, _))) = (self.folders(cx), self.copy_source(window, cx))
+        let (Some(folders), Some((rels, _))) = (self.folders(cx), self.copy_source(window, cx))
         else {
             return;
         };
         // The window's node of several folders is on no disk: nothing to copy.
-        let Some((root, rest, _)) = folders.mount(&rel) else {
-            return;
+        let paths: Vec<String> = rels
+            .iter()
+            .filter_map(|rel| folders.mount(rel))
+            .map(|(root, rest, _)| paths::absolute(root, &rest))
+            .collect();
+        let label = if paths.len() > 1 {
+            "Copied paths"
+        } else {
+            "Copied path"
         };
-        self.copy(paths::absolute(root, &rest), "Copied path", cx);
+        if !paths.is_empty() {
+            self.copy(paths.join("\n"), label, cx);
+        }
     }
 
     fn copy_relative_path(
@@ -1136,36 +1155,48 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(folders), Some((rel, lines))) = (self.folders(cx), self.copy_source(window, cx))
+        let (Some(folders), Some((rels, lines))) = (self.folders(cx), self.copy_source(window, cx))
         else {
             return;
         };
         // Inside its own folder, as IntelliJ's Copy Path From Content Root.
-        let rel = folders.inside(&rel);
-        match lines {
-            Some((start, end)) => {
+        let inside: Vec<PathBuf> = rels.iter().map(|rel| folders.inside(rel)).collect();
+        match (inside.as_slice(), lines) {
+            ([rel], Some((start, end))) => {
                 let label = if start == end {
                     "Copied relative path and line"
                 } else {
                     "Copied relative path and lines"
                 };
-                self.copy(paths::with_lines(&rel, start, end), label, cx);
+                self.copy(paths::with_lines(rel, start, end), label, cx);
             }
-            None => self.copy(paths::relative(&rel), "Copied relative path", cx),
+            ([rel], None) => self.copy(paths::relative(rel), "Copied relative path", cx),
+            (many, _) => {
+                let text: Vec<String> = many.iter().map(|rel| paths::relative(rel)).collect();
+                self.copy(text.join("\n"), "Copied relative paths", cx);
+            }
         }
     }
 
     /// IntelliJ's Copy File Name: the name alone. On disk, so a folder's own row gives its name.
     fn copy_file_name(&mut self, _: &CopyFileName, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self
-            .folders(cx)
-            .zip(self.copy_source(window, cx))
-            .and_then(|(folders, (rel, _))| folders.absolute(&rel))
-            .and_then(|path| path.file_name().map(paths::display_name))
+        let (Some(folders), Some((rels, _))) = (self.folders(cx), self.copy_source(window, cx))
         else {
             return;
         };
-        self.copy(name, "Copied file name", cx);
+        let names: Vec<String> = rels
+            .iter()
+            .filter_map(|rel| folders.absolute(rel))
+            .filter_map(|path| path.file_name().map(paths::display_name))
+            .collect();
+        let label = if names.len() > 1 {
+            "Copied file names"
+        } else {
+            "Copied file name"
+        };
+        if !names.is_empty() {
+            self.copy(names.join("\n"), label, cx);
+        }
     }
 
     /// Shows the tree selection, or the active file, in a Finder window.
@@ -1175,16 +1206,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self
-            .folders(cx)
-            .zip(self.copy_source(window, cx))
-            .and_then(|(folders, (rel, _))| folders.absolute(&rel))
+        let (Some(folders), Some((rels, _))) = (self.folders(cx), self.copy_source(window, cx))
         else {
             return;
         };
+        let paths: Vec<PathBuf> = rels
+            .iter()
+            .filter_map(|rel| folders.absolute(rel))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
         if let Err(err) = std::process::Command::new("open")
             .arg("-R")
-            .arg(path)
+            .args(paths)
             .spawn()
         {
             eprintln!("subwy: could not reveal in Finder: {err}");

@@ -65,9 +65,10 @@ pub fn render(status: Status<'_>, cx: &App) -> impl IntoElement {
     let fading = status
         .copied
         .filter(|_| elapsed.is_some_and(|e| e >= COPIED_FOR && e < COPIED_FOR + FADE));
-    // While holding, the stem shows exactly what was copied; the fade returns to the plain stem.
+    // While holding, the stem shows exactly what was copied, one line after another; the fade
+    // returns to the plain stem.
     let stem_text = holding
-        .map(|copied| copied.text.clone())
+        .map(|copied| copied.text.replace('\n', " ↵ "))
         .or_else(|| status.stem.map(str::to_string))
         .unwrap_or_default();
     let base = div()

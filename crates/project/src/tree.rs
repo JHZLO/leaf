@@ -68,6 +68,19 @@ pub fn route(rows: &[Row], path: &Path) -> Vec<usize> {
         .collect()
 }
 
+/// `paths` without those inside another of them: moving or trashing a folder takes what it holds.
+pub fn outermost(paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|path| {
+            !paths
+                .iter()
+                .any(|other| other != *path && path.starts_with(other))
+        })
+        .cloned()
+        .collect()
+}
+
 #[derive(Debug)]
 pub struct ProjectTree {
     root: PathBuf,
@@ -76,7 +89,12 @@ pub struct ProjectTree {
     hide_root: bool,
     listings: HashMap<PathBuf, Vec<DirEntry>>,
     expanded: HashSet<PathBuf>,
+    /// The lead of the selection: where the keys move from and the route runs to.
     selected: Option<PathBuf>,
+    /// The other selected items (Shift and Cmd add them, IntelliJ's multiple selection).
+    also: Vec<PathBuf>,
+    /// Where a Shift range starts.
+    anchor: Option<PathBuf>,
 }
 
 impl ProjectTree {
@@ -88,6 +106,8 @@ impl ProjectTree {
             listings: HashMap::new(),
             expanded: HashSet::from([PathBuf::new()]),
             selected: None,
+            also: Vec::new(),
+            anchor: None,
         }
     }
 
@@ -103,6 +123,16 @@ impl ProjectTree {
     /// Shows a folder's new contents. A selection that is gone from it moves to a neighbor.
     pub fn set_listing(&mut self, dir: PathBuf, entries: Vec<DirEntry>) {
         let old = self.listings.insert(dir.clone(), entries);
+        // The other selected items that are gone simply leave the selection.
+        let listed = &self.listings[&dir];
+        self.also.retain(|path| match path.strip_prefix(&dir) {
+            Ok(rest) => rest.components().next().is_none_or(|first| {
+                listed
+                    .iter()
+                    .any(|e| OsStr::new(&e.name) == first.as_os_str())
+            }),
+            Err(_) => true,
+        });
         self.reselect_if_gone(&dir, old.as_deref());
     }
 
@@ -184,6 +214,8 @@ impl ProjectTree {
     /// Closes `dir` and every folder inside it, so opening it again shows only what it holds.
     pub fn collapse(&mut self, dir: &Path) {
         self.expanded.retain(|open| !open.starts_with(dir));
+        self.also
+            .retain(|path| path == dir || !path.starts_with(dir));
         if self
             .selected
             .as_deref()
@@ -199,6 +231,7 @@ impl ProjectTree {
     /// one moves up to its top-level folder.
     pub fn collapse_all(&mut self) {
         self.expanded.retain(|dir| dir.as_os_str().is_empty());
+        self.also.clear();
         if let Some(selected) = &self.selected
             && let Some(top) = selected.components().next()
         {
@@ -217,8 +250,74 @@ impl ProjectTree {
         self.selected.as_deref()
     }
 
+    /// Selects `path` alone.
     pub fn select(&mut self, path: Option<PathBuf>) {
+        self.also.clear();
+        self.anchor = path.clone();
         self.selected = path;
+    }
+
+    /// Everything selected, in the order of `rows`; the lead alone when nothing else is.
+    pub fn selection(&self, rows: &[Row]) -> Vec<PathBuf> {
+        if self.also.is_empty() {
+            return self.selected.iter().cloned().collect();
+        }
+        rows.iter()
+            .filter(|row| self.is_selected(&row.path))
+            .map(|row| row.path.clone())
+            .collect()
+    }
+
+    pub fn is_selected(&self, path: &Path) -> bool {
+        self.selected.as_deref() == Some(path) || self.also.iter().any(|p| p == path)
+    }
+
+    /// Shift+click or Shift+arrow: selects the rows from the anchor to `path`, which leads.
+    pub fn extend_to(&mut self, rows: &[Row], path: PathBuf) {
+        let anchor = self
+            .anchor
+            .clone()
+            .or_else(|| self.selected.clone())
+            .unwrap_or_else(|| path.clone());
+        let line = |p: &Path| rows.iter().position(|r| r.path == p);
+        let (Some(from), Some(to)) = (line(&anchor), line(&path)) else {
+            return self.select(Some(path));
+        };
+        let range = from.min(to)..=from.max(to);
+        self.also = rows[range]
+            .iter()
+            .map(|r| r.path.clone())
+            .filter(|p| *p != path)
+            .collect();
+        self.anchor = Some(anchor);
+        self.selected = Some(path);
+    }
+
+    /// Cmd+click: adds `path` to the selection, or takes it out when it is in.
+    pub fn toggle(&mut self, path: PathBuf) {
+        if self.selected.as_ref() == Some(&path) {
+            self.selected = self.also.pop();
+        } else if let Some(at) = self.also.iter().position(|p| *p == path) {
+            self.also.remove(at);
+        } else {
+            self.also.extend(self.selected.take());
+            self.selected = Some(path.clone());
+        }
+        self.anchor = Some(path);
+    }
+
+    /// Makes `path`, already selected, the lead, keeping the rest selected (a right-click on one of
+    /// several selected rows).
+    pub fn lead(&mut self, path: &Path) {
+        let Some(at) = self.also.iter().position(|p| p == path) else {
+            return;
+        };
+        match self.selected.replace(path.to_path_buf()) {
+            Some(old) => self.also[at] = old,
+            None => {
+                self.also.remove(at);
+            }
+        }
     }
 
     /// Selects `path` and opens every folder above it. Returns the folders it opened whose
@@ -237,7 +336,7 @@ impl ProjectTree {
                 unread.push(dir.to_path_buf());
             }
         }
-        self.selected = Some(path.to_path_buf());
+        self.select(Some(path.to_path_buf()));
         unread
     }
 
@@ -258,6 +357,11 @@ impl ProjectTree {
             .map(moved)
             .collect();
         self.selected = self.selected.take().map(moved);
+        self.also = std::mem::take(&mut self.also)
+            .into_iter()
+            .map(moved)
+            .collect();
+        self.anchor = self.anchor.take().map(moved);
         let (Some(dir), Some(old), Some(new)) = (from.parent(), from.file_name(), to.file_name())
         else {
             return;
@@ -278,6 +382,7 @@ impl ProjectTree {
         }
         self.listings.retain(|dir, _| !dir.starts_with(path));
         self.expanded.retain(|dir| !dir.starts_with(path));
+        self.also.retain(|p| !p.starts_with(path));
     }
 
     /// The visible rows, depth first. The open folder is the first row, at depth 0.
@@ -779,5 +884,87 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows[1].loops);
         assert!(!rows[1].expanded);
+    }
+
+    fn chosen(tree: &ProjectTree) -> Vec<String> {
+        tree.selection(&tree.rows())
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn shift_selects_the_rows_from_the_anchor() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/b.md".into()));
+        let rows = tree.rows();
+        tree.extend_to(&rows, "src".into());
+        assert_eq!(chosen(&tree), ["docs/guide/b.md", "docs/readme.md", "src"]);
+        assert_eq!(selected(&tree), Some("src"));
+        // The anchor stays: going back up past it selects the other way.
+        tree.extend_to(&rows, "docs/guide".into());
+        assert_eq!(
+            chosen(&tree),
+            ["docs/guide", "docs/guide/a.md", "docs/guide/b.md"]
+        );
+        // A plain selection starts over.
+        tree.select(Some("top.md".into()));
+        assert_eq!(chosen(&tree), ["top.md"]);
+    }
+
+    #[test]
+    fn cmd_adds_and_takes_out_one_item() {
+        let mut tree = sample();
+        tree.select(Some("docs/readme.md".into()));
+        tree.toggle("top.md".into());
+        tree.toggle("docs/guide/a.md".into());
+        assert_eq!(
+            chosen(&tree),
+            ["docs/guide/a.md", "docs/readme.md", "top.md"]
+        );
+        assert_eq!(selected(&tree), Some("docs/guide/a.md"));
+        // Taking the lead out hands the lead to another selected item.
+        tree.toggle("docs/guide/a.md".into());
+        assert_eq!(chosen(&tree), ["docs/readme.md", "top.md"]);
+        assert!(tree.selected().is_some_and(|lead| tree.is_selected(lead)));
+        tree.toggle("docs/readme.md".into());
+        assert_eq!(chosen(&tree), ["top.md"]);
+    }
+
+    #[test]
+    fn a_selected_row_can_take_the_lead() {
+        let mut tree = sample();
+        tree.select(Some("docs/readme.md".into()));
+        tree.toggle("top.md".into());
+        tree.lead(Path::new("docs/readme.md"));
+        assert_eq!(selected(&tree), Some("docs/readme.md"));
+        assert_eq!(chosen(&tree), ["docs/readme.md", "top.md"]);
+    }
+
+    #[test]
+    fn hidden_or_vanished_items_leave_the_selection() {
+        let mut tree = sample();
+        tree.select(Some("docs/guide/a.md".into()));
+        tree.toggle("docs/guide/b.md".into());
+        tree.toggle("top.md".into());
+        tree.collapse(Path::new("docs/guide"));
+        assert_eq!(chosen(&tree), ["top.md"]);
+        // A vanished lead moves to a neighbor, as before; the others just leave.
+        tree.select(Some("top.md".into()));
+        tree.toggle("docs/readme.md".into());
+        tree.set_listing("".into(), vec![dir("docs"), dir("src")]);
+        assert_eq!(chosen(&tree), ["docs/readme.md"]);
+    }
+
+    #[test]
+    fn the_outermost_items_carry_what_they_hold() {
+        let paths: Vec<PathBuf> = ["docs", "docs/guide/a.md", "docsy.md", "src/main.rs"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(
+            outermost(&paths),
+            ["docs", "docsy.md", "src/main.rs"].map(PathBuf::from)
+        );
     }
 }

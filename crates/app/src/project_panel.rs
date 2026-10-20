@@ -27,9 +27,9 @@ use subwy_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyFileName, CopyPath, CopyRelativePath, Expand, FocusEditor, NewFile, Open,
-        PROJECT_PANEL, PageDown, PageUp, PassThrough, Rename, RevealInFinder, SelectFirst,
-        SelectLast, SelectNext, SelectPrev, SpeedSearch, Trash,
+        Collapse, CopyFileName, CopyPath, CopyRelativePath, Expand, ExtendNext, ExtendPrev,
+        FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp, PassThrough, Rename,
+        RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev, SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -351,6 +351,11 @@ impl ProjectPanel {
         self.tree.selected()
     }
 
+    /// Everything selected, top to bottom.
+    pub fn selection(&self) -> Vec<PathBuf> {
+        self.tree.selection(&self.tree.rows())
+    }
+
     /// The rows the tree shows, top to bottom; for the UI checks.
     pub fn row_paths(&self) -> Vec<PathBuf> {
         self.tree.rows().into_iter().map(|row| row.path).collect()
@@ -420,6 +425,21 @@ impl ProjectPanel {
         }
         if let Some(path) = outcome.select {
             self.tree.select(Some(path));
+        }
+        self.reveal_selection();
+        cx.notify();
+    }
+
+    /// Shift+Up and Shift+Down: the selection grows, or shrinks back, a row at a time from where it
+    /// started (IntelliJ).
+    fn extend(&mut self, key: NavKey, cx: &mut Context<Self>) {
+        if self.edit.is_some() || self.menu.is_some() {
+            return;
+        }
+        self.search = None;
+        let rows = self.tree.rows();
+        if let Some(path) = nav::navigate(&rows, self.tree.selected(), key).select {
+            self.tree.extend_to(&rows, path);
         }
         self.reveal_selection();
         cx.notify();
@@ -586,7 +606,12 @@ impl ProjectPanel {
         self.focus_handle.focus(window, cx);
         self.watch_focus(window, cx);
         self.search = None;
-        self.tree.select(Some(path.clone()));
+        // A row of a larger selection keeps it: the menu is for all of them.
+        if self.tree.is_selected(&path) {
+            self.tree.lead(&path);
+        } else {
+            self.tree.select(Some(path.clone()));
+        }
         let own_folder = path.as_os_str().is_empty() || self.folders.is_folder(&path);
         let entries = context_entries(own_folder, self.folders.several());
         self.menu = Some(Menu::Context {
@@ -865,56 +890,78 @@ impl ProjectPanel {
         if self.edit.is_some() {
             return;
         }
-        // Never a folder of the window itself (several leave by Remove from Window).
-        let Some(path) = self
-            .tree
-            .selected()
+        // Never a folder of the window itself (several leave by Remove from Window), and a folder
+        // takes what it holds.
+        let paths: Vec<PathBuf> = tree::outermost(&self.selection())
+            .into_iter()
             .filter(|s| !s.as_os_str().is_empty() && !self.folders.is_folder(s))
-            .map(Path::to_path_buf)
-        else {
+            .collect();
+        let jobs: Vec<(PathBuf, PathBuf, PathBuf)> = paths
+            .iter()
+            .filter_map(|path| {
+                let (root, rest, _) = self.folders.mount(path)?;
+                Some((path.clone(), root.to_path_buf(), rest))
+            })
+            .collect();
+        if jobs.is_empty() {
             return;
-        };
+        }
         self.search = None;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let question = match jobs.as_slice() {
+            [(path, ..)] => format!("Move “{}” to the Trash?", file_name(path)),
+            many => format!("Move {} items to the Trash?", many.len()),
+        };
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Move “{name}” to the Trash?"),
+            &question,
             None,
             &["Move to Trash", "Cancel"],
             cx,
         );
-        let Some((root, rest, _)) = self.folders.mount(&path) else {
-            return;
-        };
-        let root = root.to_path_buf();
         cx.spawn_in(window, async move |this, cx| {
             if answer.await != Ok(0) {
                 return;
             }
-            let work = cx
-                .background_executor()
-                .spawn(async move { fs::trash(&root, &rest) });
-            let result = work.await;
-            let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(()) => {
-                    this.tree.forget(&path);
-                    // Reading the folder again moves the selection to a neighbor.
-                    this.load_dir(path.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
-                    cx.emit(FileEvent::Trashed { path });
+            let work = cx.background_executor().spawn(async move {
+                jobs.into_iter()
+                    .map(|(path, root, rest)| {
+                        let result = fs::trash(&root, &rest);
+                        (path, result)
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let results = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let mut failed = Vec::new();
+                for (path, result) in results {
+                    match result {
+                        Ok(()) => {
+                            this.tree.forget(&path);
+                            // Reading the folder again moves the selection to a neighbor.
+                            this.load_dir(
+                                path.parent().map(Path::to_path_buf).unwrap_or_default(),
+                                cx,
+                            );
+                            cx.emit(FileEvent::Trashed { path });
+                        }
+                        Err(err) => failed.push((path, err)),
+                    }
                 }
-                Err(err) => {
-                    // Only a report: there is no answer to wait for.
-                    drop(window.prompt(
-                        PromptLevel::Critical,
-                        &format!("“{name}” could not be moved to the Trash"),
-                        Some(&err.to_string()),
-                        &["OK"],
-                        cx,
-                    ));
-                }
+                let title = match failed.as_slice() {
+                    [] => return,
+                    [(path, _)] => {
+                        format!("“{}” could not be moved to the Trash", file_name(path))
+                    }
+                    many => format!("{} items could not be moved to the Trash", many.len()),
+                };
+                // Only a report: there is no answer to wait for.
+                drop(window.prompt(
+                    PromptLevel::Critical,
+                    &title,
+                    Some(&failed[0].1.to_string()),
+                    &["OK"],
+                    cx,
+                ));
             });
         })
         .detach();
@@ -1140,6 +1187,20 @@ impl ProjectPanel {
     }
 
     fn open_selected(&mut self, pass_through: bool, cx: &mut Context<Self>) {
+        // Enter on several items opens their files, as in IntelliJ; Space still shows the lead.
+        let rows = self.tree.rows();
+        let chosen = self.tree.selection(&rows);
+        if chosen.len() > 1 && !pass_through {
+            for row in rows.iter().filter(|r| r.kind == EntryKind::File) {
+                if chosen.contains(&row.path) {
+                    cx.emit(PanelEvent::Open {
+                        path: row.path.clone(),
+                        pass_through: false,
+                    });
+                }
+            }
+            return;
+        }
         let Some(selected) = self.tree.selected().map(Path::to_path_buf) else {
             return;
         };
@@ -1165,8 +1226,27 @@ impl ProjectPanel {
     }
 
     /// A click selects; a folder toggles on the first click and a file opens on the second.
-    /// Folders ignore the second click so that a double click does not undo itself.
-    fn click_row(&mut self, path: PathBuf, kind: EntryKind, count: usize, cx: &mut Context<Self>) {
+    /// Folders ignore the second click so that a double click does not undo itself. Shift selects
+    /// the rows up to here and Cmd adds or takes out this one, opening nothing.
+    fn click_row(
+        &mut self,
+        path: PathBuf,
+        kind: EntryKind,
+        count: usize,
+        modifiers: Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if modifiers.shift || modifiers.platform {
+            if modifiers.shift {
+                let rows = self.tree.rows();
+                self.tree.extend_to(&rows, path);
+            } else {
+                self.tree.toggle(path);
+            }
+            self.reveal_selection();
+            cx.notify();
+            return;
+        }
         self.tree.select(Some(path));
         let open = match kind {
             EntryKind::Dir => count == 1,
@@ -1455,6 +1535,13 @@ impl ProjectPanel {
                     )),
             )
     }
+}
+
+/// The last part of a tree path, as a prompt names the item.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// A folder's listing. With several folders the window's node lists them.
@@ -1856,8 +1943,22 @@ impl Render for ProjectPanel {
                     .and_then(|s| hits.iter().position(|h| *h == s));
                 (hits.len(), at)
             });
+        // The other selected rows, by list line: they wear the selection without the route.
+        let chosen = self.tree.selection(&rows);
         let items = self.items(rows);
         let count = items.len();
+        let marked: Vec<(usize, usize)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(line, item)| match item {
+                Item::Row(row)
+                    if Some(&row.path) != selected.as_ref() && chosen.contains(&row.path) =>
+                {
+                    Some((row.depth, line))
+                }
+                _ => None,
+            })
+            .collect();
         let new_at = items
             .iter()
             .position(|item| matches!(item, Item::New { .. }));
@@ -1895,6 +1996,7 @@ impl Render for ProjectPanel {
                         selection: c(if focused { p.tree_sel } else { p.cur }),
                         hover: c(p.hover),
                     };
+                    route::paint_marked(window, bounds, &look, &marked);
                     route::paint(window, bounds, &look, &shape, ping, &stops, &hovered);
                 },
             )
@@ -1940,6 +2042,8 @@ impl Render for ProjectPanel {
             .on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.up_down(NavKey::Up, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.up_down(NavKey::Down, cx)))
+            .on_action(cx.listener(|this, _: &ExtendPrev, _, cx| this.extend(NavKey::Up, cx)))
+            .on_action(cx.listener(|this, _: &ExtendNext, _, cx| this.extend(NavKey::Down, cx)))
             .on_action(cx.listener(|this, _: &Expand, _, cx| this.apply(NavKey::Right, cx)))
             .on_action(cx.listener(|this, _: &Collapse, _, cx| this.apply(NavKey::Left, cx)))
             .on_action(cx.listener(|this, _: &SelectFirst, _, cx| this.apply(NavKey::First, cx)))
@@ -2084,6 +2188,8 @@ impl Render for ProjectPanel {
                                             let (path, kind) = (row.path.clone(), row.kind);
                                             let is_selected =
                                                 selected.as_deref() == Some(row.path.as_path());
+                                            let is_chosen =
+                                                is_selected || chosen.contains(&row.path);
                                             let popup =
                                                 new_choice.filter(|_| is_selected).map(|choice| {
                                                     new_popup(row.depth, choice, panel.clone(), cx)
@@ -2105,7 +2211,7 @@ impl Render for ProjectPanel {
                                             let panel = panel.clone();
                                             Self::render_row(
                                                 row,
-                                                is_selected.then_some(focused),
+                                                is_chosen.then_some(focused),
                                                 route,
                                                 query.as_deref(),
                                                 None,
@@ -2141,8 +2247,15 @@ impl Render for ProjectPanel {
                                             })
                                             .on_click(move |event, _, cx| {
                                                 let count = event.click_count();
+                                                let modifiers = event.modifiers();
                                                 let _ = panel.update(cx, |this, cx| {
-                                                    this.click_row(path.clone(), kind, count, cx)
+                                                    this.click_row(
+                                                        path.clone(),
+                                                        kind,
+                                                        count,
+                                                        modifiers,
+                                                        cx,
+                                                    )
                                                 });
                                             })
                                             .into_any_element()

@@ -283,6 +283,21 @@ pub fn paint(
 }
 
 /// A row's background, from just left of its chevron to the right end, with soft corners.
+/// The selection's background on the other selected rows, given as (depth, line). No route runs to
+/// them: the route belongs to the lead.
+pub fn paint_marked(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    look: &Look,
+    marked: &[(usize, usize)],
+) {
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        for &(depth, row) in marked {
+            band(window, look, depth as f32, row as f32, look.selection);
+        }
+    });
+}
+
 fn band(window: &mut Window, look: &Look, depth: f32, row: f32, color: Hsla) {
     let left = look.x(depth) - look.px(11.);
     let height = look.row - look.px(2.);

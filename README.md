@@ -103,6 +103,7 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 | | `Cmd+T` | New terminal tab |
 | Tree | `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown` | Move |
 | | `Right` / `Left` | Open a folder or step in / close it or step out |
+| | `Shift+Up` / `Shift+Down`, `Shift`-click, `Cmd`-click | Select several rows; copying, `Enter` and the Trash take them all |
 | | `Enter` | Open the file (or toggle the folder) |
 | | `Space` | Pass through: show the file and stay in the tree |
 | | type letters, `Cmd+F` | Jump to a name |

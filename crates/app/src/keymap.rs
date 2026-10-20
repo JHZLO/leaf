@@ -37,6 +37,8 @@ actions!(
     [
         SelectPrev,
         SelectNext,
+        ExtendPrev,
+        ExtendNext,
         Expand,
         Collapse,
         SelectFirst,
@@ -141,6 +143,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-0", ZoomReset, ws),
         KeyBinding::new("up", SelectPrev, panel),
         KeyBinding::new("down", SelectNext, panel),
+        KeyBinding::new("shift-up", ExtendPrev, panel),
+        KeyBinding::new("shift-down", ExtendNext, panel),
         KeyBinding::new("right", Expand, panel),
         KeyBinding::new("left", Collapse, panel),
         KeyBinding::new("home", SelectFirst, panel),

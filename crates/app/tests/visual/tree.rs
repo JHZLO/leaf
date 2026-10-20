@@ -18,6 +18,7 @@ pub fn run(check: &mut Check) {
     header(check);
     rename(check);
     context_menu(check);
+    several(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -272,6 +273,70 @@ fn context_menu(check: &mut Check) {
         fixture.path().join("docs/todo.md").is_file(),
         true,
     );
+}
+
+/// Shift and Cmd select several rows; copying and Enter take them all.
+fn several(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // Rows: the folder, docs, guide, notes.md, src, target, .gitignore, README.md.
+    check.keys(window, "down down right down shift-down cmd-alt-shift-c");
+    let copied = check.clipboard();
+    check.expect_eq(
+        "shift-down adds the next row and copying takes both",
+        copied,
+        Some("docs/guide\ndocs/notes.md".into()),
+    );
+    let command = gpui_kit::Modifiers {
+        platform: true,
+        ..Default::default()
+    };
+    click_with(check, window, 100., row_y(7), command);
+    check.keys(window, "cmd-alt-shift-c");
+    let copied = check.clipboard();
+    check.expect_eq(
+        "cmd-click adds a row",
+        copied,
+        Some("docs/guide\ndocs/notes.md\nREADME.md".into()),
+    );
+    check.shot(window, "tree-10-several");
+    let shift = gpui_kit::Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    click_with(check, window, 100., row_y(5), shift);
+    check.keys(window, "cmd-alt-shift-c");
+    let copied = check.clipboard();
+    check.expect_eq(
+        "shift-click selects from the last clicked row",
+        copied,
+        Some("target\n.gitignore\nREADME.md".into()),
+    );
+    // Cmd-click the notes and Enter: the files open, the folder (target) is left alone. Files are read
+    // off the main thread, so their tabs come in the order the reads finish.
+    click_with(check, window, 100., row_y(3), command);
+    check.keys(window, "enter");
+    let mut open = check.workspace(window, |w, cx| w.open_files(cx));
+    open.sort();
+    check.expect_eq(
+        "enter opens every selected file",
+        open,
+        [".gitignore", "README.md", "docs/notes.md"]
+            .map(PathBuf::from)
+            .to_vec(),
+    );
+}
+
+fn click_with(
+    check: &mut Check,
+    window: AnyWindowHandle,
+    x: f32,
+    y: f32,
+    modifiers: gpui_kit::Modifiers,
+) {
+    let at = gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    check.cx.simulate_click(window, at, modifiers);
+    check.cx.run_until_parked();
 }
 
 /// The middle of the tree's row `index`, under the title bar and the tree's header.
