@@ -2,7 +2,7 @@
 //! shown at a time. Cmd+T adds one (anywhere in the window), Cmd+W closes the one in front,
 //! Cmd+Shift+[ and ] step between them, and a shell that exits takes its tab with it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
 
@@ -55,7 +55,13 @@ impl TerminalTabs {
     /// Starts a shell in a new tab after the others and brings it to the front. False when the
     /// shell could not start.
     pub fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let started = match TerminalPanel::start(&self.cwd) {
+        let cwd = self.cwd.clone();
+        self.add_in(&cwd, window, cx)
+    }
+
+    /// [`add`](Self::add), with the shell starting in `cwd` (the tree's Open in Terminal).
+    pub fn add_in(&mut self, cwd: &Path, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let started = match TerminalPanel::start(cwd) {
             Ok(started) => started,
             Err(err) => {
                 eprintln!("subwy: could not start the shell: {err}");

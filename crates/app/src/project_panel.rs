@@ -29,8 +29,8 @@ use crate::{
     icons,
     keymap::{
         Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CopyTo, CutItems, Expand,
-        ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open, PROJECT_PANEL, PageDown,
-        PageUp, PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast,
+        ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open, OpenInTerminal, PROJECT_PANEL,
+        PageDown, PageUp, PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast,
         SelectNext, SelectPrev, SpeedSearch, Trash,
     },
     route,
@@ -107,6 +107,8 @@ pub enum PanelEvent {
     RemoveFolder(PathBuf),
     /// Items went on the clipboard (Cmd+C, Cmd+X): show it on the stem as a path copy is shown.
     Copied { text: String, label: &'static str },
+    /// Open in Terminal: a new shell in this folder (relative path).
+    OpenTerminal(PathBuf),
 }
 
 /// How the clipboard marks the tree's own Cmd+C and Cmd+X, beside the paths as text.
@@ -164,6 +166,7 @@ enum Entry {
     MoveTo,
     Trash,
     RevealInFinder,
+    OpenInTerminal,
     RemoveFromWindow,
 }
 
@@ -183,6 +186,7 @@ impl Entry {
             Entry::MoveTo => "Move To…",
             Entry::Trash => "Move to Trash",
             Entry::RevealInFinder => "Reveal in Finder",
+            Entry::OpenInTerminal => "Open in Terminal",
             Entry::RemoveFromWindow => "Remove from Window",
         }
     }
@@ -236,7 +240,7 @@ fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
     } else {
         vec![Entry::Rename, Entry::CopyTo, Entry::MoveTo, Entry::Trash]
     });
-    groups.push(vec![Entry::RevealInFinder]);
+    groups.push(vec![Entry::RevealInFinder, Entry::OpenInTerminal]);
     if own_folder && several {
         groups.push(vec![Entry::RemoveFromWindow]);
     }
@@ -709,6 +713,23 @@ impl ProjectPanel {
         dir
     }
 
+    /// IntelliJ's Open In > Terminal: a shell in the selected folder, or the selected file's folder.
+    fn open_in_terminal(&mut self, cx: &mut Context<Self>) {
+        let rows = self.tree.rows();
+        let Some(row) = self
+            .tree
+            .selected()
+            .and_then(|s| rows.iter().find(|r| r.path == s))
+        else {
+            return;
+        };
+        let dir = match row.kind {
+            EntryKind::Dir => row.path.clone(),
+            EntryKind::File => row.path.parent().map(Path::to_path_buf).unwrap_or_default(),
+        };
+        cx.emit(PanelEvent::OpenTerminal(dir));
+    }
+
     /// Cmd+C and Cmd+X: puts the selection on the clipboard for Cmd+V, as its paths one per line
     /// (pasted elsewhere, they are paths), marked as subwy's items to copy or to move.
     fn put_on_clipboard(&mut self, cut: bool, cx: &mut Context<Self>) {
@@ -991,6 +1012,7 @@ impl ProjectPanel {
             Entry::MoveTo => self.transfer(true, window, cx),
             Entry::Trash => self.trash(window, cx),
             Entry::RevealInFinder => window.dispatch_action(Box::new(RevealInFinder), cx),
+            Entry::OpenInTerminal => self.open_in_terminal(cx),
             Entry::RemoveFromWindow => cx.emit(PanelEvent::RemoveFolder(path)),
         }
         cx.notify();
@@ -2623,6 +2645,7 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &PasteItems, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &CopyTo, window, cx| this.transfer(false, window, cx)))
             .on_action(cx.listener(|this, _: &MoveTo, window, cx| this.transfer(true, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenInTerminal, _, cx| this.open_in_terminal(cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     // The pointer holds the middle of the gap, half a gap past the tree's edge.

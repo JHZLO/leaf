@@ -22,6 +22,7 @@ pub fn run(check: &mut Check) {
     clipboard(check);
     copy_move(check);
     drag_and_drop(check);
+    open_in_terminal(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -533,6 +534,27 @@ fn drop_from_finder(check: &mut Check, window: AnyWindowHandle, file: &Path, at:
     check.cx.run_until_parked();
     std::thread::sleep(std::time::Duration::from_millis(100));
     check.cx.run_until_parked();
+}
+
+/// The menu's Open in Terminal starts a shell in the row's folder, in a tab of its own.
+fn open_in_terminal(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    let before = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    // Open in Terminal is the last line of the docs row's menu.
+    right_click(check, window, 100., row_y(1));
+    check.keys(window, "up enter");
+    let after = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("open in terminal adds a tab", after, before + 1);
+    let prompt = crate::terminal::wait_for(check, window, |lines| {
+        lines.iter().any(|line| line.contains('$'))
+    });
+    check.expect_eq("its shell starts", prompt, true);
+    check.keys(window, "p w d enter");
+    let here = crate::terminal::wait_for(check, window, |lines| {
+        lines.iter().any(|line| line.ends_with("/docs"))
+    });
+    check.expect_eq("the shell runs in the row's folder", here, true);
 }
 
 fn click_with(

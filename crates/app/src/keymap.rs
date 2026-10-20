@@ -57,6 +57,7 @@ actions!(
         PasteItems,
         CopyTo,
         MoveTo,
+        OpenInTerminal,
     ]
 );
 

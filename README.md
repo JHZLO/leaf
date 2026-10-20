@@ -111,7 +111,7 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 | | `Cmd+X`, `Cmd+C`, `Cmd+V` | Cut or copy the selected items, paste them into the selected folder (files copied in Finder paste too; a taken name gets ` copy`, nothing is replaced) |
 | | `F5`, `F6` | Copy or move the selected items to the path typed on the line under the tree (a new name, or a folder ending in `/`) |
 | | drag | Rows onto a folder move there (hold `Option` to copy); onto the editor they open, onto the terminal their paths are typed. Files from Finder are copied into the folder they are dropped on |
-| | right-click | The row's menu: new file or folder, cut, copy, paste, copy the path or the name, rename, copy to, move to, trash, reveal in Finder (arrows and `Enter` pick) |
+| | right-click | The row's menu: new file or folder, cut, copy, paste, copy the path or the name, rename, copy to, move to, trash, reveal in Finder, open in the terminal (arrows and `Enter` pick) |
 | | `Esc` | Back to the editor |
 | Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
 | | `Cmd+W`, `Cmd+Shift+[` / `]` | Close the terminal tab, previous / next terminal tab |

@@ -515,6 +515,7 @@ impl Workspace {
                 PanelEvent::AddFolder => this.ask_for_folder(window, cx),
                 PanelEvent::RemoveFolder(rel) => this.remove_folder(&rel.clone(), window, cx),
                 PanelEvent::Copied { text, label } => this.show_copied(text.clone(), label, cx),
+                PanelEvent::OpenTerminal(rel) => this.open_terminal_in(&rel.clone(), window, cx),
             },
         ));
         self._subscriptions.push(cx.subscribe_in(
@@ -916,6 +917,20 @@ impl Workspace {
             return;
         }
         self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
+    /// The tree's Open in Terminal: a new shell tab in the folder `rel`, in front with the keyboard.
+    fn open_terminal_in(&mut self, rel: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dir) = self.folders(cx).and_then(|folders| folders.absolute(rel)) else {
+            return;
+        };
+        let Some(view) = self.show_terminal(window, cx).map(|t| t.view.clone()) else {
+            return;
+        };
+        if view.update(cx, |tabs, cx| tabs.add_in(&dir, window, cx)) {
+            self.focus_terminal(window, cx);
+        }
         cx.notify();
     }
 
