@@ -5,25 +5,44 @@ use std::{ops::Range, path::PathBuf, sync::Arc};
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use subwy_project::{
+    finder::{self, Route},
     folders::Folders,
     fuzzy,
     index::{self, FileIndex},
 };
 
-use crate::theme::{self, c, size, z};
+use crate::theme::{self, Palette, c, size, z};
 
 /// Sizes at 100% zoom.
-const WIDTH: f32 = 560.;
+const WIDTH: f32 = 600.;
 /// Below the title bar, over the top of the tab bar.
 const TOP_GAP: f32 = 8.;
 const INPUT_HEIGHT: f32 = 34.;
 const INPUT_LINE: f32 = 20.;
-const ROW_HEIGHT: f32 = 24.;
-const PADDING_X: f32 = 12.;
+const ROW_HEIGHT: f32 = 44.;
+const PADDING_X: f32 = 14.;
 const LIST_PADDING_Y: f32 = 4.;
-const NAME_GAP: f32 = 8.;
-const FOLDER_TEXT: f32 = 12.;
+const ROW_GAP: f32 = 14.;
+const NAME_TEXT: f32 = 13.5;
+const SMALL_TEXT: f32 = 11.5;
+const TEXT_LINE: f32 = 17.;
 const RADIUS: f32 = 6.;
+
+/// The route drawn in front of each result, in its own box.
+const ROUTE_WIDTH: f32 = 74.;
+const ROUTE_HEIGHT: f32 = 16.;
+/// The window folder's ring; the file's station lies `STATION_STEP` past the last ring.
+const FIRST_RING: f32 = 6.;
+const LAST_RING: f32 = 54.;
+const STATION_STEP: f32 = 12.;
+/// Rings no further apart than this, and no closer than touching: a deeper path loses its first
+/// rings off the left, keeping the folders nearest the file (as its folder text does).
+const RING_STEP_MOST: f32 = 24.;
+const RING_STEP_LEAST: f32 = 10.;
+const RING_RADIUS: f32 = 4.9;
+const RING_BORDER: f32 = 1.8;
+const STATION_RADIUS: f32 = 5.;
+const LEG_WIDTH: f32 = 3.;
 
 /// The most results shown.
 const MAX_ROWS: usize = 12;
@@ -41,7 +60,9 @@ pub struct Finder {
     input: Entity<InputState>,
     /// Empty until the walk of the folder, started when the finder opens, comes back.
     index: Option<Arc<FileIndex>>,
-    matches: Vec<fuzzy::Match>,
+    found: fuzzy::Found,
+    /// The name each route starts from; `None` when the paths start with their folder's name.
+    window_folder: Option<String>,
     selected: usize,
     _load: Task<()>,
     /// The search for the latest query; replacing it drops the result of an older one.
@@ -59,6 +80,7 @@ impl Focusable for Finder {
 
 impl Finder {
     pub fn new(folders: Folders, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let window_folder = (!folders.several()).then(|| folders.name().to_string());
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to file"));
         let subscriptions = vec![cx.subscribe_in(
             &input,
@@ -81,7 +103,8 @@ impl Finder {
         Self {
             input,
             index: None,
-            matches: Vec::new(),
+            found: fuzzy::Found::default(),
+            window_folder,
             selected: 0,
             _load: load,
             search: Task::ready(()),
@@ -98,9 +121,9 @@ impl Finder {
         let search =
             cx.background_spawn(async move { fuzzy::search(&query, &index.paths, MAX_ROWS) });
         self.search = cx.spawn(async move |this, cx| {
-            let matches = search.await;
+            let found = search.await;
             let _ = this.update(cx, |this, cx| {
-                this.matches = matches;
+                this.found = found;
                 this.selected = 0;
                 cx.notify();
             });
@@ -109,7 +132,7 @@ impl Finder {
 
     /// Up and Down stop at the ends, as in the tree.
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Some(last) = self.matches.len().checked_sub(1) else {
+        let Some(last) = self.found.matches.len().checked_sub(1) else {
             return;
         };
         self.selected = self.selected.saturating_add_signed(delta).min(last);
@@ -117,33 +140,31 @@ impl Finder {
     }
 
     fn open(&mut self, row: usize, cx: &mut Context<Self>) {
-        let (Some(index), Some(found)) = (&self.index, self.matches.get(row)) else {
+        let (Some(index), Some(found)) = (&self.index, self.found.matches.get(row)) else {
             return;
         };
         cx.emit(FinderEvent::Open(PathBuf::from(&index.paths[found.index])));
     }
 
-    fn render_row(
-        &self,
-        row: usize,
-        path: &str,
-        found: &fuzzy::Match,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn render_row(&self, row: usize, route: Route, cx: &mut Context<Self>) -> Stateful<Div> {
         let p = theme::colors(cx);
         let selected = row == self.selected;
-        let name_start = path.rfind('/').map_or(0, |slash| slash + 1);
-        let folder = &path[..name_start.saturating_sub(1)];
-        let name = &path[name_start..];
-        let (folder_marks, name_marks) = matched_ranges(path, &found.positions, name_start);
-        // Semibold: medium barely shows at 13 px.
-        let matched = HighlightStyle {
-            font_weight: Some(FontWeight::SEMIBOLD),
-            ..Default::default()
+        let (ink, sub) = if selected {
+            (p.sel_ink, p.sel_ink)
+        } else {
+            (p.ink, p.sub)
         };
-        let styled = |text: &str, marks: Vec<Range<usize>>| {
-            StyledText::new(text.to_string())
-                .with_highlights(marks.into_iter().map(|range| (range, matched)))
+        let styled = |text: String, marks: Vec<Range<usize>>, color: Option<u32>| {
+            let matched = HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                color: color.map(c),
+                ..Default::default()
+            };
+            StyledText::new(text).with_highlights(marks.into_iter().map(|range| (range, matched)))
+        };
+        let stops = match route.stops {
+            1 => "1 stop".to_string(),
+            n => format!("{n} stops"),
         };
         div()
             .id(("finder-row", row))
@@ -151,54 +172,125 @@ impl Finder {
             .px(z(PADDING_X, cx))
             .flex()
             .items_center()
-            .gap(z(NAME_GAP, cx))
+            .gap(z(ROW_GAP, cx))
             .whitespace_nowrap()
             .overflow_hidden()
             .when(selected, |el| el.bg(c(p.sel_bg)))
             .when(!selected, |el| el.hover(|style| style.bg(c(p.hover))))
             .on_click(cx.listener(move |this, _, _, cx| this.open(row, cx)))
+            .child(mini_route(route.stops, selected, p, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .line_height(z(TEXT_LINE, cx))
+                    .child(
+                        div()
+                            .text_size(z(NAME_TEXT, cx))
+                            .text_color(c(ink))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(styled(route.name, route.name_marks, None)),
+                    )
+                    .child(
+                        // A long way loses its start, keeping the folders nearest the file.
+                        div()
+                            .text_size(z(SMALL_TEXT, cx))
+                            .text_color(c(sub))
+                            .when(selected, |el| el.opacity(0.8))
+                            .overflow_hidden()
+                            .text_ellipsis_start()
+                            .child(styled(route.via, route.via_marks, Some(ink))),
+                    ),
+            )
             .child(
                 div()
                     .flex_none()
-                    .text_color(c(if selected { p.sel_ink } else { p.ink }))
-                    .child(styled(name, name_marks)),
+                    .text_size(z(SMALL_TEXT, cx))
+                    .text_color(c(sub))
+                    .child(stops),
             )
-            .when(!folder.is_empty(), |el| {
-                // A long folder loses its start, keeping the folders nearest the file.
-                el.child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis_start()
-                        .text_size(z(FOLDER_TEXT, cx))
-                        .text_color(c(p.sub))
-                        .child(styled(folder, folder_marks)),
-                )
-            })
     }
 }
 
-/// The matched characters as byte ranges, split into the folder's and the file name's (each
-/// relative to its own text). A matched `/` between the two shows in neither.
-fn matched_ranges(
-    path: &str,
-    positions: &[usize],
-    name_start: usize,
-) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    let (mut folder, mut name) = (Vec::new(), Vec::new());
-    let mut positions = positions.iter().peekable();
-    for (i, (byte, ch)) in path.char_indices().enumerate() {
-        if positions.next_if_eq(&&i).is_none() {
-            continue;
-        }
-        let end = byte + ch.len_utf8();
-        if byte >= name_start {
-            name.push(byte - name_start..end - name_start);
-        } else if end < name_start {
-            folder.push(byte..end);
-        }
+/// The way to a file as a short line: a ring for each folder on the way, the window's own first,
+/// each leg in its depth's route color, and the file's station in the color of the leg reaching it.
+fn mini_route(stops: usize, selected: bool, p: &Palette, cx: &App) -> impl IntoElement {
+    let unit = z(1., cx);
+    let ring_ink = c(if selected { p.sel_ink } else { p.ink });
+    let legs: Vec<Hsla> = (0..stops.max(1))
+        .map(|depth| c(p.route[depth % p.route.len()]))
+        .collect();
+    let rings = ring_positions(stops);
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                let y = bounds.center().y;
+                let at = |x: f32| point(bounds.left() + unit * x, y);
+                let station = rings.last().map_or(FIRST_RING, |last| last + STATION_STEP);
+                // Legs run between the rings' edges, so a ring's inside shows the row behind it.
+                let ends: Vec<f32> = rings.iter().copied().chain([station]).collect();
+                for (leg, pair) in ends.windows(2).enumerate() {
+                    let to_station = leg + 2 == ends.len();
+                    let mut path = PathBuilder::stroke(unit * LEG_WIDTH);
+                    path.move_to(at(pair[0] + RING_RADIUS));
+                    path.line_to(at(if to_station {
+                        pair[1]
+                    } else {
+                        pair[1] - RING_RADIUS
+                    }));
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, legs[leg]);
+                    }
+                }
+                for &x in &rings {
+                    let r = unit * RING_RADIUS;
+                    window.paint_quad(quad(
+                        Bounds::new(at(x) - point(r, r), size(r * 2., r * 2.)),
+                        r,
+                        transparent_black(),
+                        unit * RING_BORDER,
+                        ring_ink,
+                        BorderStyle::Solid,
+                    ));
+                }
+                let r = unit * STATION_RADIUS;
+                let color = legs[ends.len().saturating_sub(2)];
+                window.paint_quad(
+                    fill(
+                        Bounds::new(at(station) - point(r, r), size(r * 2., r * 2.)),
+                        color,
+                    )
+                    .corner_radii(r),
+                );
+            });
+        },
+    )
+    .flex_none()
+    .w(z(ROUTE_WIDTH, cx))
+    .h(z(ROUTE_HEIGHT, cx))
+}
+
+/// The x of each folder's ring in the route's box: spread over the box, at most
+/// `RING_STEP_MOST` apart; past `RING_STEP_LEAST` the first ones fall off the left.
+fn ring_positions(stops: usize) -> Vec<f32> {
+    let gaps = stops.saturating_sub(1) as f32;
+    let span = LAST_RING - FIRST_RING;
+    let step = if gaps == 0. {
+        0.
+    } else {
+        (span / gaps).min(RING_STEP_MOST)
+    };
+    if step >= RING_STEP_LEAST || gaps == 0. {
+        (0..stops).map(|i| FIRST_RING + step * i as f32).collect()
+    } else {
+        (0..stops)
+            .map(|i| LAST_RING - RING_STEP_LEAST * (gaps - i as f32))
+            .collect()
     }
-    (folder, name)
 }
 
 /// The finder placed at the top center of the window, over the tabs.
@@ -218,12 +310,22 @@ impl Render for Finder {
         let p = theme::colors(cx);
         let rows: Vec<Stateful<Div>> = match self.index.clone() {
             Some(index) => self
+                .found
                 .matches
                 .iter()
                 .enumerate()
-                .map(|(row, found)| self.render_row(row, &index.paths[found.index], found, cx))
+                .map(|(row, found)| {
+                    let path = &index.paths[found.index];
+                    let route =
+                        finder::route(path, &found.positions, self.window_folder.as_deref());
+                    self.render_row(row, route, cx)
+                })
                 .collect(),
             None => Vec::new(),
+        };
+        let stations = match self.found.total {
+            1 => "1 station".to_string(),
+            n => format!("{n} stations"),
         };
         let input = Input::new(&self.input)
             .appearance(false)
@@ -252,13 +354,29 @@ impl Render for Finder {
             .text_color(c(p.ink))
             .child(
                 div()
+                    .flex()
+                    .items_center()
                     .when(!rows.is_empty(), |el| {
                         el.border_b_1().border_color(c(p.line))
                     })
-                    .child(input),
+                    .child(div().flex_1().min_w_0().child(input))
+                    .when(self.index.is_some(), |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .pr(z(PADDING_X, cx))
+                                .text_size(z(SMALL_TEXT, cx))
+                                .text_color(c(p.sub))
+                                .child(stations),
+                        )
+                    }),
             )
             .when(!rows.is_empty(), |el| {
                 el.child(div().py(z(LIST_PADDING_Y, cx)).children(rows))
+                    .child(crate::project_panel::key_hints(
+                        &[("↑↓", "Choose"), ("↩", "Get off here"), ("Esc", "Stay")],
+                        cx,
+                    ))
             })
     }
 }
@@ -266,21 +384,22 @@ impl Render for Finder {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's glob export includes a `test` macro that would replace the built-in one.
-    use super::matched_ranges;
+    use super::ring_positions;
 
     #[test]
-    fn matched_characters_split_between_folder_and_name() {
-        // "docs/guide/keys.md" with d, g, /, k, s matched.
-        let (folder, name) = matched_ranges("docs/guide/keys.md", &[0, 5, 10, 11, 14], 11);
-        assert_eq!(folder, [0..1, 5..6]);
-        assert_eq!(name, [0..1, 3..4]);
+    fn rings_spread_over_the_box_up_to_a_step() {
+        assert_eq!(ring_positions(1), [6.]);
+        assert_eq!(ring_positions(2), [6., 30.]);
+        assert_eq!(ring_positions(3), [6., 30., 54.]);
+        assert_eq!(ring_positions(4), [6., 22., 38., 54.]);
     }
 
     #[test]
-    fn matched_ranges_are_in_bytes() {
-        let path = "\u{d55c}/\u{ae00}.md";
-        let (folder, name) = matched_ranges(path, &[0, 2], 4);
-        assert_eq!(folder, vec![0..3]);
-        assert_eq!(name, vec![0..3]);
+    fn a_deep_path_keeps_the_rings_nearest_the_file() {
+        let rings = ring_positions(8);
+        assert_eq!(rings.len(), 8);
+        assert_eq!(rings[7], 54.);
+        assert_eq!(rings[6], 44.);
+        assert!(rings[0] < 0.);
     }
 }

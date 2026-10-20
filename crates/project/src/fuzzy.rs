@@ -26,19 +26,30 @@ pub struct Match {
     pub positions: Vec<usize>,
 }
 
+/// What a search found: the best few, and how many matched in all.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Found {
+    pub matches: Vec<Match>,
+    pub total: usize,
+}
+
 /// The best `limit` matches of `query` among `paths`, best first. Ties go to the shorter path,
 /// then to the one listed first (the index lists paths alphabetically). An empty query matches
 /// every path, in the listed order.
-pub fn search(query: &str, paths: &[String], limit: usize) -> Vec<Match> {
+pub fn search(query: &str, paths: &[String], limit: usize) -> Found {
     let mut matcher = Matcher::new(query);
     if matcher.query.is_empty() {
-        return (0..paths.len().min(limit))
+        let matches = (0..paths.len().min(limit))
             .map(|index| Match {
                 index,
                 score: 0,
                 positions: Vec::new(),
             })
             .collect();
+        return Found {
+            matches,
+            total: paths.len(),
+        };
     }
     // Scores only; the positions of the few that are shown are worked out again below.
     let mut found = Vec::new();
@@ -50,12 +61,13 @@ pub fn search(query: &str, paths: &[String], limit: usize) -> Vec<Match> {
     let order = |a: &(i32, usize, usize), b: &(i32, usize, usize)| {
         b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
     };
+    let total = found.len();
     if found.len() > limit {
         found.select_nth_unstable_by(limit, order);
         found.truncate(limit);
     }
     found.sort_unstable_by(order);
-    found
+    let matches = found
         .into_iter()
         .map(|(score, _, index)| {
             matcher.align(&paths[index]);
@@ -65,7 +77,8 @@ pub fn search(query: &str, paths: &[String], limit: usize) -> Vec<Match> {
                 positions: matcher.positions(),
             }
         })
-        .collect()
+        .collect();
+    Found { matches, total }
 }
 
 /// How well `query` matches `path`, and which characters matched; `None` when it does not match.
@@ -285,6 +298,7 @@ mod tests {
     fn order(query: &str, paths: &[&str]) -> Vec<String> {
         let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
         search(query, &paths, 50)
+            .matches
             .into_iter()
             .map(|m| paths[m.index].clone())
             .collect()
@@ -355,6 +369,9 @@ mod tests {
             .map(|p| p.to_string())
             .collect();
         let found = search("main", &paths, 2);
+        // All four match; two are kept.
+        assert_eq!(found.total, 4);
+        let found = found.matches;
         let indices: Vec<usize> = found.iter().map(|m| m.index).collect();
         assert_eq!(indices, [1, 0]);
         assert_eq!(found[0].positions, [0, 1, 2, 3]);
@@ -368,6 +385,8 @@ mod tests {
             .map(|p| p.to_string())
             .collect();
         let found = search("  ", &paths, 2);
+        assert_eq!(found.total, 3);
+        let found = found.matches;
         let indices: Vec<usize> = found.iter().map(|m| m.index).collect();
         assert_eq!(indices, [0, 1]);
         assert!(found.iter().all(|m| m.positions.is_empty()));
@@ -432,7 +451,7 @@ mod tests {
             let mut shown = 0;
             for _ in 0..5 {
                 let start = std::time::Instant::now();
-                shown = search(query, &paths, 12).len();
+                shown = search(query, &paths, 12).matches.len();
                 best = best.min(start.elapsed().as_secs_f64() * 1000.);
             }
             println!("{query:>10}: {best:>6.2} ms, {shown} shown");

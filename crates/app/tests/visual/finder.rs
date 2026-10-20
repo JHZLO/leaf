@@ -14,7 +14,7 @@ use crate::check::{Check, fixture};
 fn row_center(row: usize) -> Point<Pixels> {
     point(
         px(640.),
-        px(38. + 8. + 1. + 34. + 1. + 4. + 24. * row as f32 + 12.),
+        px(38. + 8. + 1. + 34. + 1. + 4. + 44. * row as f32 + 22.),
     )
 }
 

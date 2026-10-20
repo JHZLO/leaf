@@ -3099,7 +3099,10 @@ fn hint_keys(selected: Option<&Row>) -> &'static [(&'static str, &'static str)] 
     }
 }
 
-fn key_hints(keys: &'static [(&'static str, &'static str)], cx: &App) -> impl IntoElement {
+pub(crate) fn key_hints(
+    keys: &'static [(&'static str, &'static str)],
+    cx: &App,
+) -> impl IntoElement {
     let p = theme::colors(cx);
     // Tighter than the mockup (12 / 12 / 5 / 5): at the default width the file hints need every
     // point. A hint that still does not fit wraps onto a hidden second line instead of being cut.
