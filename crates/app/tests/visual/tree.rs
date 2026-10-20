@@ -19,6 +19,7 @@ pub fn run(check: &mut Check) {
     rename(check);
     context_menu(check);
     several(check);
+    clipboard(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -236,30 +237,27 @@ fn context_menu(check: &mut Check) {
         Some(PathBuf::from("README.md")),
     );
     check.shot(window, "tree-9-context-menu");
-    // Nothing is highlighted at first; Down goes to New File, then New Directory, Copy Path,
-    // Copy Relative Path.
-    check.keys(window, "down down down down enter");
+    // Nothing is highlighted at first; Down goes to New File, then New Directory, Cut, Copy,
+    // Paste, Copy Path, Copy Relative Path.
+    check.keys(window, "down down down down down down down enter");
     let copied = check.clipboard();
     check.expect_eq(
         "the menu's copy relative path copies the row's",
         copied,
         Some("README.md".into()),
     );
-    // Copy File Name is the fifth line; on a folder's row it copies the folder's name.
+    // Copy File Name is the eighth line; on a folder's row it copies the folder's name.
     right_click(check, window, 100., row_y(1));
-    check.keys(window, "down down down down down enter");
+    check.keys(window, "down down down down down down down down enter");
     let copied = check.clipboard();
     check.expect_eq(
         "the menu's copy file name copies the name alone",
         copied,
         Some("docs".into()),
     );
-    // Rename… is the sixth line.
+    // Rename… is up from the end, past Reveal in Finder and Move to Trash.
     right_click(check, window, 100., row_y(5));
-    check.keys(
-        window,
-        "down down down down down down enter cmd-a i n d e x . m d enter",
-    );
+    check.keys(window, "up up up enter cmd-a i n d e x . m d enter");
     check.expect_eq(
         "the menu's rename renames on disk",
         fixture.path().join("index.md").is_file(),
@@ -324,6 +322,50 @@ fn several(check: &mut Check) {
         [".gitignore", "README.md", "docs/notes.md"]
             .map(PathBuf::from)
             .to_vec(),
+    );
+}
+
+/// Cmd+C and Cmd+V copy items into the selected folder (a taken name gets Finder's `copy`), Cmd+X
+/// and Cmd+V move them and their open tabs.
+fn clipboard(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // Rows: the folder, docs, src, target, .gitignore, README.md.
+    check.keys(window, "end cmd-c");
+    check.keys(window, "cmd-v");
+    check.expect_eq(
+        "cmd-v beside the original makes a copy with a free name",
+        std::fs::read_to_string(fixture.path().join("README copy.md")).ok(),
+        Some("# leaf\n".into()),
+    );
+    // Copy README.md into docs.
+    check.keys(window, "home down cmd-v");
+    check.expect_eq(
+        "cmd-v on a folder copies into it",
+        fixture.path().join("docs/README.md").is_file(),
+        true,
+    );
+    let selected = selection(check, window);
+    check.expect_eq(
+        "the copy is selected",
+        selected,
+        Some(PathBuf::from("docs/README.md")),
+    );
+    // Rows now: the folder, docs, guide, notes.md, README.md, src. Open notes.md, cut it, and
+    // paste it into src: the file and its tab move.
+    check.keys(window, "home down down down enter");
+    check.keys(window, "cmd-1 cmd-x down down cmd-v");
+    check.shot(window, "tree-11-paste");
+    let moved = (
+        fixture.path().join("docs/notes.md").exists(),
+        fixture.path().join("src/notes.md").is_file(),
+    );
+    check.expect_eq("cmd-x then cmd-v moves the file", moved, (false, true));
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "its open tab follows the move",
+        active,
+        Some(PathBuf::from("src/notes.md")),
     );
 }
 

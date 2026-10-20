@@ -52,6 +52,9 @@ actions!(
         NewFile,
         Rename,
         Trash,
+        CutItems,
+        CopyItems,
+        PasteItems,
     ]
 );
 
@@ -165,6 +168,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-n", NewFile, panel),
         KeyBinding::new("shift-f6", Rename, panel),
         KeyBinding::new("cmd-backspace", Trash, panel),
+        KeyBinding::new("cmd-x", CutItems, panel),
+        KeyBinding::new("cmd-c", CopyItems, panel),
+        KeyBinding::new("cmd-v", PasteItems, panel),
         // The recent folders on the empty window.
         KeyBinding::new("up", SelectPrev, Some("Workspace && empty")),
         KeyBinding::new("down", SelectNext, Some("Workspace && empty")),

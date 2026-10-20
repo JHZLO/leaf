@@ -27,9 +27,10 @@ use subwy_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyFileName, CopyPath, CopyRelativePath, Expand, ExtendNext, ExtendPrev,
-        FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp, PassThrough, Rename,
-        RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev, SpeedSearch, Trash,
+        Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CutItems, Expand,
+        ExtendNext, ExtendPrev, FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
+        PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext,
+        SelectPrev, SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -103,6 +104,31 @@ pub enum PanelEvent {
     AddFolder,
     /// A folder row's Remove from Window (relative path of the folder's row).
     RemoveFolder(PathBuf),
+    /// Items went on the clipboard (Cmd+C, Cmd+X): show it on the stem as a path copy is shown.
+    Copied { text: String, label: &'static str },
+}
+
+/// How the clipboard marks the tree's own Cmd+C and Cmd+X, beside the paths as text.
+const CLIPBOARD_COPY: &str = "subwy-items-copy";
+const CLIPBOARD_CUT: &str = "subwy-items-cut";
+
+/// What a Cmd+V in the tree would paste: files copied in Finder (to copy), or the tree's own
+/// Cmd+C (to copy) or Cmd+X (to move), as absolute paths. Anything else on the clipboard is text.
+fn clipboard_items(item: &ClipboardItem) -> Option<(Vec<PathBuf>, bool)> {
+    let finder = item.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().to_vec()),
+        _ => None,
+    });
+    if let Some(paths) = finder {
+        return Some((paths, false));
+    }
+    let cut = match item.metadata()?.as_str() {
+        CLIPBOARD_CUT => true,
+        CLIPBOARD_COPY => false,
+        _ => return None,
+    };
+    let paths = item.text()?.lines().map(PathBuf::from).collect();
+    Some((paths, cut))
 }
 
 /// A small list floating over the tree.
@@ -126,6 +152,9 @@ enum Menu {
 enum Entry {
     NewFile,
     NewDirectory,
+    Cut,
+    Copy,
+    Paste,
     CopyPath,
     CopyRelativePath,
     CopyFileName,
@@ -140,6 +169,9 @@ impl Entry {
         match self {
             Entry::NewFile => "New File",
             Entry::NewDirectory => "New Directory",
+            Entry::Cut => "Cut",
+            Entry::Copy => "Copy",
+            Entry::Paste => "Paste",
             Entry::CopyPath => "Copy Path",
             Entry::CopyRelativePath => "Copy Relative Path",
             Entry::CopyFileName => "Copy File Name",
@@ -153,6 +185,9 @@ impl Entry {
     /// The key that does the same, as the hint line writes keys.
     fn key(self) -> Option<&'static str> {
         match self {
+            Entry::Cut => Some("⌘X"),
+            Entry::Copy => Some("⌘C"),
+            Entry::Paste => Some("⌘V"),
             Entry::CopyPath => Some("⌘⇧C"),
             Entry::CopyRelativePath => Some("⌥⌘⇧C"),
             Entry::Rename => Some("⇧F6"),
@@ -173,10 +208,16 @@ impl Entry {
 }
 
 /// The right-click menu of an item, in groups. A folder of the window (`own_folder`) is not
-/// renamed or trashed; with several folders it can leave the window instead.
+/// cut, renamed or trashed; with several folders it can leave the window instead.
 fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
+    let clipboard = if own_folder {
+        vec![Entry::Copy, Entry::Paste]
+    } else {
+        vec![Entry::Cut, Entry::Copy, Entry::Paste]
+    };
     let mut groups = vec![
         vec![Entry::NewFile, Entry::NewDirectory],
+        clipboard,
         vec![
             Entry::CopyPath,
             Entry::CopyRelativePath,
@@ -576,6 +617,14 @@ impl ProjectPanel {
         }
         self.watch_focus(window, cx);
         self.search = None;
+        let dir = self.target_dir(cx);
+        self.menu = Some(Menu::New { dir, choice: 0 });
+        self.reveal_selection();
+        cx.notify();
+    }
+
+    /// Where new and pasted items go, opened: the selected folder, else the selected file's folder.
+    fn target_dir(&mut self, cx: &mut Context<Self>) -> PathBuf {
         let rows = self.tree.rows();
         let selected = self
             .tree
@@ -593,9 +642,148 @@ impl ProjectPanel {
         if self.tree.expand(&dir) {
             self.load_dir(dir.clone(), cx);
         }
-        self.menu = Some(Menu::New { dir, choice: 0 });
-        self.reveal_selection();
-        cx.notify();
+        dir
+    }
+
+    /// Cmd+C and Cmd+X: puts the selection on the clipboard for Cmd+V, as its paths one per line
+    /// (pasted elsewhere, they are paths), marked as subwy's items to copy or to move.
+    fn put_on_clipboard(&mut self, cut: bool, cx: &mut Context<Self>) {
+        if self.edit.is_some() || self.menu.is_some() {
+            return;
+        }
+        // A folder of the window does not move; it can be copied somewhere else.
+        let paths: Vec<PathBuf> = tree::outermost(&self.selection())
+            .iter()
+            .filter(|p| !(cut && (p.as_os_str().is_empty() || self.folders.is_folder(p))))
+            .filter_map(|p| self.folders.absolute(p))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let text = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mark = if cut { CLIPBOARD_CUT } else { CLIPBOARD_COPY };
+        cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
+            text.clone(),
+            mark.to_string(),
+        ));
+        let label = match (cut, paths.len()) {
+            (true, 1) => "Cut file",
+            (true, _) => "Cut files",
+            (false, 1) => "Copied file",
+            (false, _) => "Copied files",
+        };
+        cx.emit(PanelEvent::Copied { text, label });
+    }
+
+    /// Cmd+V: copies, or moves after Cmd+X, what is on the clipboard into the target folder, off
+    /// the main thread. Files copied in Finder paste too. A copy whose name is taken gets Finder's
+    /// `name copy`; a move never replaces anything.
+    fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() || self.menu.is_some() {
+            return;
+        }
+        let Some((sources, cut)) = cx.read_from_clipboard().as_ref().and_then(clipboard_items)
+        else {
+            return;
+        };
+        self.search = None;
+        let dir = self.target_dir(cx);
+        let Some(dir_abs) = self.folders.absolute(&dir) else {
+            return;
+        };
+        let work = cx.background_executor().spawn(async move {
+            sources
+                .into_iter()
+                .map(|from| {
+                    let name = from
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let result = if cut {
+                        fs::move_into(&from, &dir_abs, &name)
+                    } else {
+                        let kind = if from.is_dir() {
+                            EntryKind::Dir
+                        } else {
+                            EntryKind::File
+                        };
+                        fs::copy_into(&from, &dir_abs, &fs::free_name(&dir_abs, &name, kind))
+                    };
+                    (from, result)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let results = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.pasted(dir, cut, results, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// Shows what a paste made, selected; moved items take their open tabs along.
+    fn pasted(
+        &mut self,
+        dir: PathBuf,
+        cut: bool,
+        results: Vec<(PathBuf, Result<PathBuf, NameError>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut landed = Vec::new();
+        let mut failed = Vec::new();
+        for (from, result) in results {
+            match result {
+                Ok(to) => {
+                    let moved = self.folders.relative(&from).zip(self.folders.relative(&to));
+                    if cut && let Some((from, to)) = moved.filter(|(from, to)| from != to) {
+                        self.tree.renamed(&from, &to);
+                        self.load_dir(from.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
+                        cx.emit(FileEvent::Renamed { from, to });
+                    }
+                    landed.push(to);
+                }
+                Err(err) => failed.push((from, err)),
+            }
+        }
+        self.load_dir(dir, cx);
+        let rels: Vec<PathBuf> = landed
+            .iter()
+            .filter_map(|abs| self.folders.relative(abs))
+            .collect();
+        if let Some((first, rest)) = rels.split_first() {
+            self.reveal(first, cx);
+            for rel in rest {
+                self.tree.toggle(rel.clone());
+            }
+        }
+        // Moved once: the clipboard keeps the new paths as plain text, so a second Cmd+V does
+        // not try to move them again.
+        if cut && !landed.is_empty() {
+            let text = landed
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+        let title = match failed.as_slice() {
+            [] => return,
+            [(from, _)] => format!("“{}” could not be pasted", file_name(from)),
+            many => format!("{} items could not be pasted", many.len()),
+        };
+        drop(window.prompt(
+            PromptLevel::Critical,
+            &title,
+            Some(&failed[0].1.to_string()),
+            &["OK"],
+            cx,
+        ));
     }
 
     /// Right-click on a row: selects it and shows what can be done to it.
@@ -638,6 +826,9 @@ impl ProjectPanel {
                 };
                 self.choose_new(kind, window, cx);
             }
+            Entry::Cut => window.dispatch_action(Box::new(CutItems), cx),
+            Entry::Copy => window.dispatch_action(Box::new(CopyItems), cx),
+            Entry::Paste => window.dispatch_action(Box::new(PasteItems), cx),
             Entry::CopyPath => window.dispatch_action(Box::new(CopyPath), cx),
             Entry::CopyRelativePath => window.dispatch_action(Box::new(CopyRelativePath), cx),
             Entry::CopyFileName => window.dispatch_action(Box::new(CopyFileName), cx),
@@ -2099,6 +2290,9 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &NewFile, window, cx| this.new_file(window, cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_action(cx.listener(|this, _: &Trash, window, cx| this.trash(window, cx)))
+            .on_action(cx.listener(|this, _: &CutItems, _, cx| this.put_on_clipboard(true, cx)))
+            .on_action(cx.listener(|this, _: &CopyItems, _, cx| this.put_on_clipboard(false, cx)))
+            .on_action(cx.listener(|this, _: &PasteItems, window, cx| this.paste(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     // The pointer holds the middle of the gap, half a gap past the tree's edge.
@@ -2437,6 +2631,7 @@ mod tests {
         assert!(!item.contains(&Entry::RemoveFromWindow));
         let folder = flat(true, false);
         assert!(!folder.contains(&Entry::Rename) && !folder.contains(&Entry::Trash));
+        assert!(!folder.contains(&Entry::Cut) && folder.contains(&Entry::Paste));
         assert!(!folder.contains(&Entry::RemoveFromWindow));
         // One of several folders leaves the window instead.
         assert!(flat(true, true).contains(&Entry::RemoveFromWindow));

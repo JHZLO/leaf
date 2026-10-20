@@ -108,7 +108,8 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 | | `Space` | Pass through: show the file and stay in the tree |
 | | type letters, `Cmd+F` | Jump to a name |
 | | `Cmd+N`, `Shift+F6`, `Cmd+Backspace` | New file or folder (pick in the popup, `F` / `D`), rename, move to the Trash |
-| | right-click | The row's menu: new file or folder, copy the path or the name, rename, trash, reveal in Finder (arrows and `Enter` pick) |
+| | `Cmd+X`, `Cmd+C`, `Cmd+V` | Cut or copy the selected items, paste them into the selected folder (files copied in Finder paste too; a taken name gets ` copy`, nothing is replaced) |
+| | right-click | The row's menu: new file or folder, cut, copy, paste, copy the path or the name, rename, trash, reveal in Finder (arrows and `Enter` pick) |
 | | `Esc` | Back to the editor |
 | Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
 | | `Cmd+W`, `Cmd+Shift+[` / `]` | Close the terminal tab, previous / next terminal tab |

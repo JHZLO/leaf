@@ -514,6 +514,7 @@ impl Workspace {
                 }
                 PanelEvent::AddFolder => this.ask_for_folder(window, cx),
                 PanelEvent::RemoveFolder(rel) => this.remove_folder(&rel.clone(), window, cx),
+                PanelEvent::Copied { text, label } => this.show_copied(text.clone(), label, cx),
             },
         ));
         self._subscriptions.push(cx.subscribe_in(
@@ -1110,6 +1111,11 @@ impl Workspace {
 
     fn copy(&mut self, text: String, label: &'static str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        self.show_copied(text, label, cx);
+    }
+
+    /// The stem shows what went on the clipboard, then fades back.
+    fn show_copied(&mut self, text: String, label: &'static str, cx: &mut Context<Self>) {
         self.copy_seq += 1;
         self.copied = Some(Copied {
             text,

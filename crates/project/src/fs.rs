@@ -365,6 +365,8 @@ pub enum NameError {
     Exists,
     /// A folder on the way is a file.
     NotAFolder(String),
+    /// A folder would go inside itself.
+    IntoItself,
     Io(io::Error),
 }
 
@@ -375,6 +377,7 @@ impl std::fmt::Display for NameError {
             NameError::Invalid => write!(f, "Not a valid name"),
             NameError::Exists => write!(f, "Already exists"),
             NameError::NotAFolder(name) => write!(f, "“{name}” is a file"),
+            NameError::IntoItself => write!(f, "A folder cannot go inside itself"),
             NameError::Io(err) => write!(f, "{err}"),
         }
     }
@@ -464,6 +467,95 @@ pub fn rename(root: &Path, from: &Path, new_name: &str) -> Result<PathBuf, NameE
     Ok(to)
 }
 
+/// The name a copy of `name` takes in the folder `dir` without replacing anything: the name itself
+/// when it is free, else Finder's `notes copy.md`, `notes copy 2.md`. A folder's name, or a name
+/// with nothing before its dot (`.env`), has no extension to keep.
+pub fn free_name(dir: &Path, name: &str, kind: EntryKind) -> String {
+    let (stem, ext) = match name.rfind('.') {
+        Some(dot) if dot > 0 && kind == EntryKind::File => name.split_at(dot),
+        _ => (name, ""),
+    };
+    std::iter::once(name.to_string())
+        .chain((1..).map(|n| match n {
+            1 => format!("{stem} copy{ext}"),
+            n => format!("{stem} copy {n}{ext}"),
+        }))
+        .find(|candidate| std::fs::symlink_metadata(dir.join(candidate)).is_err())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Copies the file or folder `from` into the folder `dir` as `name` (absolute paths) and returns
+/// the copy. A folder is copied whole and a link as a link, so a link that loops is no trouble.
+/// Nothing that exists is replaced, and a folder never goes inside itself.
+pub fn copy_into(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NameError> {
+    let to = destination(from, dir, name)?;
+    if std::fs::symlink_metadata(&to).is_ok() {
+        return Err(NameError::Exists);
+    }
+    copy_tree(from, &to)?;
+    Ok(to)
+}
+
+/// Moves the file or folder `from` into the folder `dir` as `name` (absolute paths) and returns where
+/// it went. Nothing that exists is replaced; moving to where it already is changes nothing. Across
+/// disks it is copied, and then the original goes to the Trash rather than being deleted.
+pub fn move_into(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NameError> {
+    use std::os::unix::fs::MetadataExt as _;
+    let to = destination(from, dir, name)?;
+    if to == from {
+        return Ok(to);
+    }
+    // On a case-insensitive disk `A.md` is `a.md` itself, which is no other item.
+    if let Ok(there) = std::fs::symlink_metadata(&to) {
+        let here = std::fs::symlink_metadata(from)?;
+        if (there.dev(), there.ino()) != (here.dev(), here.ino()) {
+            return Err(NameError::Exists);
+        }
+    }
+    match std::fs::rename(from, &to) {
+        Ok(()) => Ok(to),
+        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
+            copy_tree(from, &to)?;
+            move_to_trash(from)?;
+            Ok(to)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Where `from` lands in `dir` as `name`, after checking the name and that a folder is not
+/// going inside itself.
+fn destination(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NameError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if !valid_name(name) || name.contains('/') {
+        return Err(NameError::Invalid);
+    }
+    if dir.starts_with(from) {
+        return Err(NameError::IntoItself);
+    }
+    Ok(dir.join(name))
+}
+
+/// Copies a file, a link, or a folder with everything in it, keeping permissions.
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if meta.file_type().is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else if meta.is_dir() {
+        std::fs::create_dir(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        std::fs::set_permissions(to, meta.permissions())
+    } else {
+        std::fs::copy(from, to).map(drop)
+    }
+}
+
 /// Moves an item of the open folder (`path`, relative to `root`) to the Trash.
 pub fn trash(root: &Path, path: &Path) -> io::Result<()> {
     // The open folder itself is never a row, so an empty path can only be a mistake.
@@ -473,6 +565,10 @@ pub fn trash(root: &Path, path: &Path) -> io::Result<()> {
             "the open folder cannot go to the Trash",
         ));
     }
+    move_to_trash(&root.join(path))
+}
+
+fn move_to_trash(path: &Path) -> io::Result<()> {
     let mut trash = trash::TrashContext::default();
     // Finder's way asks for permission to control Finder and plays a sound; the system call
     // needs neither. Its cost: some macOS versions offer no "Put Back" for the item.
@@ -481,7 +577,7 @@ pub fn trash(root: &Path, path: &Path) -> io::Result<()> {
         use trash::macos::{DeleteMethod, TrashContextExtMacos as _};
         trash.set_delete_method(DeleteMethod::NsFileManager);
     }
-    trash.delete(root.join(path)).map_err(|err| {
+    trash.delete(path).map_err(|err| {
         let message = match err {
             trash::Error::Os { description, .. } | trash::Error::Unknown { description } => {
                 description
@@ -1052,5 +1148,109 @@ mod tests {
             std::fs::read_to_string(dir.path().join("gone.md")).unwrap(),
             "back\n"
         );
+    }
+
+    #[test]
+    fn a_free_name_follows_finder() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        assert_eq!(free_name(dir, "notes.md", EntryKind::File), "notes.md");
+        write(&dir.join("notes.md"), "");
+        assert_eq!(free_name(dir, "notes.md", EntryKind::File), "notes copy.md");
+        write(&dir.join("notes copy.md"), "");
+        assert_eq!(
+            free_name(dir, "notes.md", EntryKind::File),
+            "notes copy 2.md"
+        );
+        write(&dir.join(".env"), "");
+        assert_eq!(free_name(dir, ".env", EntryKind::File), ".env copy");
+        std::fs::create_dir(dir.join("v1.2")).unwrap();
+        assert_eq!(free_name(dir, "v1.2", EntryKind::Dir), "v1.2 copy");
+    }
+
+    #[test]
+    fn copies_a_folder_whole_with_links_as_links() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write(&root.join("docs/guide/a.md"), "a\n");
+        // A link back up would never end if it were followed.
+        symlink(root.join("docs"), root.join("docs/guide/up")).unwrap();
+        std::fs::create_dir(root.join("out")).unwrap();
+        let copy = copy_into(&root.join("docs"), &root.join("out"), "docs").unwrap();
+        assert_eq!(copy, root.join("out/docs"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("out/docs/guide/a.md")).unwrap(),
+            "a\n"
+        );
+        assert!(
+            std::fs::symlink_metadata(root.join("out/docs/guide/up"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // The original stays.
+        assert!(root.join("docs/guide/a.md").is_file());
+    }
+
+    #[test]
+    fn copying_and_moving_never_replace() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write(&root.join("a.md"), "mine\n");
+        write(&root.join("docs/a.md"), "theirs\n");
+        let from = root.join("a.md");
+        let docs = root.join("docs");
+        assert!(matches!(
+            copy_into(&from, &docs, "a.md"),
+            Err(NameError::Exists)
+        ));
+        assert!(matches!(
+            move_into(&from, &docs, "a.md"),
+            Err(NameError::Exists)
+        ));
+        assert_eq!(
+            std::fs::read_to_string(docs.join("a.md")).unwrap(),
+            "theirs\n"
+        );
+        assert!(from.is_file());
+    }
+
+    #[test]
+    fn moves_a_file_into_a_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write(&root.join("a.md"), "a\n");
+        std::fs::create_dir(root.join("docs")).unwrap();
+        let moved = move_into(&root.join("a.md"), &root.join("docs"), "b.md").unwrap();
+        assert_eq!(moved, root.join("docs/b.md"));
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), "a\n");
+        assert!(!root.join("a.md").exists());
+        // Moving it where it already is changes nothing.
+        assert_eq!(
+            move_into(&moved, &root.join("docs"), "b.md").unwrap(),
+            moved
+        );
+        assert!(moved.is_file());
+    }
+
+    #[test]
+    fn a_folder_never_goes_inside_itself() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        write(&root.join("docs/guide/a.md"), "");
+        let (docs, guide) = (root.join("docs"), root.join("docs/guide"));
+        assert!(matches!(
+            copy_into(&docs, &guide, "docs"),
+            Err(NameError::IntoItself)
+        ));
+        assert!(matches!(
+            move_into(&docs, &guide, "docs"),
+            Err(NameError::IntoItself)
+        ));
+        assert!(matches!(
+            copy_into(&docs, &docs, "docs copy"),
+            Err(NameError::IntoItself)
+        ));
+        assert_eq!(dir_names(&guide), ["a.md"]);
     }
 }
