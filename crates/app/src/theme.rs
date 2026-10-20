@@ -256,6 +256,9 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
             "status_bar.border": hex(p.line),
             "window.border": hex(p.frame),
             "link": hex(p.syn_type),
+            // Off, the switch's track must still read as one on the paper.
+            "switch.background": hex(p.ignored),
+            "switch.thumb.background": hex(p.paper),
             "scrollbar.background": "#00000000",
             "scrollbar.thumb.background": hex(p.guide),
             "scrollbar.thumb.hover.background": hex(p.num),

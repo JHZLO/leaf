@@ -33,6 +33,10 @@ pub struct Settings {
     pub key_hints: bool,
     /// Gitignored items in the tree, dimmed; `false` leaves them out.
     pub show_ignored: bool,
+    /// The tree selects the file in the active tab (IntelliJ's Always Select Opened File).
+    pub follow_active_file: bool,
+    /// A file opens on the first click in the tree, not the second.
+    pub single_click_open: bool,
     /// Extra key bindings, applied after subwy's own (so they win).
     pub keymap: Vec<KeyOverride>,
 }
@@ -82,6 +86,8 @@ impl Default for Settings {
             appearance: Appearance::System,
             key_hints: true,
             show_ignored: true,
+            follow_active_file: true,
+            single_click_open: false,
             keymap: Vec::new(),
         }
     }

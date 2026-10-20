@@ -80,6 +80,15 @@ pub fn run(check: &mut Check) {
     check.expect_eq("appearance light turns it light", dark, false);
     change(check, window, |s| s.appearance = Appearance::System);
     check.keys(window, "cmd-shift-[");
+    // The Tree page, its switches on light paper.
+    check.keys(window, "cmd-,");
+    let at = gpui_kit::point(gpui_kit::px(340.), gpui_kit::px(186.));
+    check
+        .cx
+        .simulate_click(window, at, gpui_kit::Modifiers::default());
+    check.shot(window, "settings-4-tree");
+    check.keys(window, "cmd-w");
+    tree_options(check);
     check.keys(window, "cmd-, cmd-w");
     let shown = check.workspace(window, |w, cx| w.settings_shown(cx));
     check.expect_eq("cmd-w closes the Settings tab", shown, false);
@@ -96,4 +105,34 @@ pub fn run(check: &mut Check) {
 fn change(check: &mut Check, window: AnyWindowHandle, edit: impl FnOnce(&mut Settings)) {
     check.update_workspace(window, |_, _, cx| subwy::update_settings(cx, edit));
     check.update_workspace(window, |_, _, _| {});
+}
+
+/// Open files with a single click, and the tree that stops following the active tab.
+fn tree_options(check: &mut Check) {
+    let fixture = fixture();
+    let window = check.open(Some(fixture.path()));
+    // Rows: the folder, docs, src, target, .gitignore, README.md.
+    let readme = gpui_kit::point(gpui_kit::px(100.), gpui_kit::px(38. + 34. + 22. * 5. + 11.));
+    change(check, window, |s| s.single_click_open = true);
+    check
+        .cx
+        .simulate_click(window, readme, gpui_kit::Modifiers::default());
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "one click opens a file",
+        active,
+        Some(PathBuf::from("README.md")),
+    );
+    change(check, window, |s| {
+        s.single_click_open = false;
+        s.follow_active_file = false;
+    });
+    check.keys(window, "cmd-shift-o m a i n enter");
+    let selected = check.workspace(window, |w, cx| w.tree_selection(cx));
+    check.expect_eq(
+        "the tree stays put when it does not follow",
+        selected,
+        Some(PathBuf::from("README.md")),
+    );
+    change(check, window, |s| s.follow_active_file = true);
 }

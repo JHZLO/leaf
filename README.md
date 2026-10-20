@@ -142,6 +142,8 @@ first run; changes made to it by hand apply the next time subwy starts.
   "appearance": "system",
   "key_hints": true,
   "show_ignored": true,
+  "follow_active_file": true,
+  "single_click_open": false,
   "keymap": [
     { "key": "cmd-p", "action": "workspace::ToggleFinder", "context": "Workspace" }
   ]

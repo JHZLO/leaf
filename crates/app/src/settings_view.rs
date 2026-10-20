@@ -271,6 +271,18 @@ fn tree_page() -> SettingPage {
             |s| s.show_ignored,
             |s, on| s.show_ignored = on,
         ),
+        switch(
+            "Always select opened file",
+            "Switching tabs selects the file in the tree, opening its folders.",
+            |s| s.follow_active_file,
+            |s, on| s.follow_active_file = on,
+        ),
+        switch(
+            "Open files with a single click",
+            "One click opens a file; otherwise it takes two.",
+            |s| s.single_click_open,
+            |s, on| s.single_click_open = on,
+        ),
     ]))
 }
 

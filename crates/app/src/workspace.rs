@@ -816,6 +816,9 @@ impl Workspace {
 
     /// The tree shows the file in the active tab (IntelliJ's "always select opened file").
     fn follow_active_file(&mut self, cx: &mut Context<Self>) {
+        if !crate::settings(cx).follow_active_file {
+            return;
+        }
         let active = self.active_file(cx);
         if active == self.followed {
             return;

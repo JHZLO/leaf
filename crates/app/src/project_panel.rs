@@ -1903,6 +1903,7 @@ impl ProjectPanel {
         self.tree.select(Some(path));
         let open = match kind {
             EntryKind::Dir => count == 1,
+            EntryKind::File if crate::settings(cx).single_click_open => count == 1,
             EntryKind::File => count == 2,
         };
         if open {
