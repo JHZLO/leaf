@@ -27,9 +27,9 @@ use subwy_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyPath, Expand, FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
-        PassThrough, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev,
-        SpeedSearch, Trash,
+        Collapse, CopyPath, CopyRelativePath, Expand, FocusEditor, NewFile, Open, PROJECT_PANEL,
+        PageDown, PageUp, PassThrough, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext,
+        SelectPrev, SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -112,8 +112,79 @@ enum Menu {
     New { dir: PathBuf, choice: usize },
     /// The header's more button.
     Options,
-    /// Right-click on one of several folders' rows.
-    Folder { path: PathBuf },
+    /// Right-click on a row: what can be done to the item at `path`, in groups. `choice` is the
+    /// highlighted line, counted across the groups; like a macOS menu, none until an arrow key.
+    Context {
+        path: PathBuf,
+        entries: Vec<Vec<Entry>>,
+        choice: Option<usize>,
+    },
+}
+
+/// One line of a row's right-click menu (IntelliJ's project view menu, without the IDE parts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry {
+    NewFile,
+    NewDirectory,
+    CopyPath,
+    CopyRelativePath,
+    Rename,
+    Trash,
+    RevealInFinder,
+    RemoveFromWindow,
+}
+
+impl Entry {
+    fn label(self) -> &'static str {
+        match self {
+            Entry::NewFile => "New File",
+            Entry::NewDirectory => "New Directory",
+            Entry::CopyPath => "Copy Path",
+            Entry::CopyRelativePath => "Copy Relative Path",
+            Entry::Rename => "Rename…",
+            Entry::Trash => "Move to Trash",
+            Entry::RevealInFinder => "Reveal in Finder",
+            Entry::RemoveFromWindow => "Remove from Window",
+        }
+    }
+
+    /// The key that does the same, as the hint line writes keys.
+    fn key(self) -> Option<&'static str> {
+        match self {
+            Entry::CopyPath => Some("⌘⇧C"),
+            Entry::CopyRelativePath => Some("⌥⌘⇧C"),
+            Entry::Rename => Some("⇧F6"),
+            Entry::Trash => Some("⌘⌫"),
+            Entry::RevealInFinder => Some("⌥⌘R"),
+            _ => None,
+        }
+    }
+
+    fn icon(self) -> Option<IconName> {
+        match self {
+            Entry::NewFile => Some(IconName::File),
+            Entry::NewDirectory => Some(IconName::Folder),
+            Entry::RemoveFromWindow => Some(IconName::FolderMinus),
+            _ => None,
+        }
+    }
+}
+
+/// The right-click menu of an item, in groups. A folder of the window (`own_folder`) is not
+/// renamed or trashed; with several folders it can leave the window instead.
+fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
+    let mut groups = vec![
+        vec![Entry::NewFile, Entry::NewDirectory],
+        vec![Entry::CopyPath, Entry::CopyRelativePath],
+    ];
+    if !own_folder {
+        groups.push(vec![Entry::Rename, Entry::Trash]);
+    }
+    groups.push(vec![Entry::RevealInFinder]);
+    if own_folder && several {
+        groups.push(vec![Entry::RemoveFromWindow]);
+    }
+    groups
 }
 
 /// What Expand All reads at most, so a huge folder does not flood the tree.
@@ -325,8 +396,9 @@ impl ProjectPanel {
     }
 
     fn apply(&mut self, key: NavKey, cx: &mut Context<Self>) {
-        // The tree stays put while a name is typed: arrows that reach here were the input's.
-        if self.edit.is_some() {
+        // The tree stays put while a name is typed: arrows that reach here were the input's. A
+        // row's menu keeps its row, so the tree stays put behind it too.
+        if self.edit.is_some() || matches!(self.menu, Some(Menu::Context { .. })) {
             return;
         }
         // Every move but Up and Down ends a speed search.
@@ -352,10 +424,27 @@ impl ProjectPanel {
         if self.edit.is_some() {
             return;
         }
-        if let Some(Menu::New { choice, .. }) = &mut self.menu {
-            *choice = if key == NavKey::Up { 0 } else { 1 };
-            cx.notify();
-            return;
+        match &mut self.menu {
+            Some(Menu::New { choice, .. }) => {
+                *choice = if key == NavKey::Up { 0 } else { 1 };
+                cx.notify();
+                return;
+            }
+            Some(Menu::Context {
+                entries, choice, ..
+            }) => {
+                // Round the ends, as macOS menus do.
+                let count = entries.iter().map(Vec::len).sum::<usize>().max(1);
+                *choice = Some(match (key, *choice) {
+                    (NavKey::Up, Some(at)) => (at + count - 1) % count,
+                    (NavKey::Up, None) => count - 1,
+                    (_, Some(at)) => (at + 1) % count,
+                    (_, None) => 0,
+                });
+                cx.notify();
+                return;
+            }
+            _ => {}
         }
         match (&self.search, key) {
             (Some(_), NavKey::Up) => self.search_step(SearchStep::Prev, cx),
@@ -394,6 +483,10 @@ impl ProjectPanel {
                 _ => {}
             }
             cx.stop_propagation();
+            return;
+        }
+        // Letters do not start a search behind a row's menu.
+        if matches!(self.menu, Some(Menu::Context { .. })) {
             return;
         }
         // Option types special characters on macOS; leave it, like Cmd and Ctrl, to shortcuts.
@@ -479,12 +572,48 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// Right-click on one of several folders' rows: selects it and shows its menu.
-    fn open_folder_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// Right-click on a row: selects it and shows what can be done to it.
+    fn open_context_menu(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
         self.focus_handle.focus(window, cx);
         self.watch_focus(window, cx);
+        self.search = None;
         self.tree.select(Some(path.clone()));
-        self.menu = Some(Menu::Folder { path });
+        let own_folder = path.as_os_str().is_empty() || self.folders.is_folder(&path);
+        let entries = context_entries(own_folder, self.folders.several());
+        self.menu = Some(Menu::Context {
+            path,
+            entries,
+            choice: None,
+        });
+        cx.notify();
+    }
+
+    /// A line of a row's menu, clicked or picked with Enter. Most do what their key does, so
+    /// the action is dispatched to the tree, which has focus.
+    fn run_entry(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Menu::Context { path, .. }) = self.menu.take() else {
+            return;
+        };
+        match entry {
+            Entry::NewFile | Entry::NewDirectory => {
+                self.new_file(window, cx);
+                let kind = if entry == Entry::NewFile {
+                    EntryKind::File
+                } else {
+                    EntryKind::Dir
+                };
+                self.choose_new(kind, window, cx);
+            }
+            Entry::CopyPath => window.dispatch_action(Box::new(CopyPath), cx),
+            Entry::CopyRelativePath => window.dispatch_action(Box::new(CopyRelativePath), cx),
+            Entry::Rename => self.rename(window, cx),
+            Entry::Trash => self.trash(window, cx),
+            Entry::RevealInFinder => window.dispatch_action(Box::new(RevealInFinder), cx),
+            Entry::RemoveFromWindow => cx.emit(PanelEvent::RemoveFolder(path)),
+        }
         cx.notify();
     }
 
@@ -815,6 +944,7 @@ impl ProjectPanel {
             },
         );
         self.watch_focus(window, cx);
+        self.menu = None;
         self.edit = Some(Edit {
             target,
             input,
@@ -1477,38 +1607,52 @@ fn new_popup(
         ))
 }
 
-/// A folder row's menu, when the window has several: Remove from Window.
-fn folder_popup(
+/// A row's right-click menu under its name: the groups, a line between them, each line's key at
+/// its right. `choice` is the line Enter picks.
+fn context_popup(
     depth: usize,
-    path: PathBuf,
+    entries: &[Vec<Entry>],
+    choice: Option<usize>,
     panel: WeakEntity<ProjectPanel>,
     cx: &App,
 ) -> impl IntoElement {
+    let p = theme::colors(cx);
+    let mut list = popup_box(cx);
+    let mut index = 0;
+    for (group, entries) in entries.iter().enumerate() {
+        if group > 0 {
+            list = list.child(div().my(z(4., cx)).h(px(1.)).bg(c(p.line)));
+        }
+        for &entry in entries {
+            let panel = panel.clone();
+            list = list.child(
+                popup_item(
+                    ("tree-menu", index),
+                    entry.icon(),
+                    entry.label(),
+                    choice == Some(index),
+                    cx,
+                )
+                .children(entry.key().map(|key| {
+                    div()
+                        .ml_auto()
+                        .pl(z(16., cx))
+                        .text_size(z(11.5, cx))
+                        .text_color(c(p.sub))
+                        .child(key)
+                }))
+                .on_click(move |_, window, cx| {
+                    let _ = panel.update(cx, |this, cx| this.run_entry(entry, window, cx));
+                }),
+            );
+            index += 1;
+        }
+    }
     div()
         .absolute()
         .left(z(row_padding(depth) + CHEVRON_SLOT, cx))
         .top_0()
-        .child(floating(
-            size::TREE_ROW,
-            Anchor::TopLeft,
-            popup_box(cx).child(
-                popup_item(
-                    "tree-folder-remove",
-                    Some(IconName::FolderMinus),
-                    "Remove from Window",
-                    false,
-                    cx,
-                )
-                .on_click(move |_, _, cx| {
-                    let _ = panel.update(cx, |this, cx| {
-                        this.menu = None;
-                        cx.emit(PanelEvent::RemoveFolder(path.clone()));
-                        cx.notify();
-                    });
-                }),
-            ),
-            cx,
-        ))
+        .child(floating(size::TREE_ROW, Anchor::TopLeft, list, cx))
 }
 
 /// A row's name, its speed search match in semibold (medium barely shows at 13 px).
@@ -1811,6 +1955,15 @@ impl Render for ProjectPanel {
                     this.choose_new(kind, window, cx);
                     return;
                 }
+                if let Some(Menu::Context {
+                    entries, choice, ..
+                }) = &this.menu
+                {
+                    if let Some(&entry) = choice.and_then(|at| entries.iter().flatten().nth(at)) {
+                        this.run_entry(entry, window, cx);
+                    }
+                    return;
+                }
                 // Enter in a name input reaches here after the input took it.
                 if this.edit.is_none() {
                     this.search = None;
@@ -1889,15 +2042,13 @@ impl Render for ProjectPanel {
                                 Some(Menu::New { choice, .. }) => Some(*choice),
                                 _ => None,
                             };
-                            let folder_menu = match &self.menu {
-                                Some(Menu::Folder { path }) => Some(path.clone()),
+                            let context_menu = match &self.menu {
+                                Some(Menu::Context {
+                                    path,
+                                    entries,
+                                    choice,
+                                }) => Some((path.clone(), entries.clone(), *choice)),
                                 _ => None,
-                            };
-                            // With several folders, a folder's row has a menu (right-click).
-                            let folder_rows: Vec<PathBuf> = if self.folders.several() {
-                                self.folders.keys().iter().map(PathBuf::from).collect()
-                            } else {
-                                Vec::new()
                             };
                             move |range, _, cx| {
                                 items[range.clone()]
@@ -1931,19 +2082,19 @@ impl Render for ProjectPanel {
                                                     new_popup(row.depth, choice, panel.clone(), cx)
                                                         .into_any_element()
                                                 });
-                                            let folder_popup = folder_menu
+                                            let context_popup = context_menu
                                                 .as_ref()
-                                                .filter(|path| **path == row.path)
-                                                .map(|path| {
-                                                    folder_popup(
+                                                .filter(|(path, ..)| *path == row.path)
+                                                .map(|(_, entries, choice)| {
+                                                    context_popup(
                                                         row.depth,
-                                                        path.clone(),
+                                                        entries,
+                                                        *choice,
                                                         panel.clone(),
                                                         cx,
                                                     )
                                                     .into_any_element()
                                                 });
-                                            let is_folder = folder_rows.contains(&row.path);
                                             let panel = panel.clone();
                                             Self::render_row(
                                                 row,
@@ -1958,22 +2109,19 @@ impl Render for ProjectPanel {
                                                 cx,
                                             )
                                             .children(popup)
-                                            .children(folder_popup)
-                                            .when(is_folder, |el| {
+                                            .children(context_popup)
+                                            .on_mouse_down(MouseButton::Right, {
                                                 let (panel, path) =
                                                     (panel.clone(), row.path.clone());
-                                                el.on_mouse_down(
-                                                    MouseButton::Right,
-                                                    move |_, window, cx| {
-                                                        let _ = panel.update(cx, |this, cx| {
-                                                            this.open_folder_menu(
-                                                                path.clone(),
-                                                                window,
-                                                                cx,
-                                                            )
-                                                        });
-                                                    },
-                                                )
+                                                move |_, window, cx| {
+                                                    let _ = panel.update(cx, |this, cx| {
+                                                        this.open_context_menu(
+                                                            path.clone(),
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                }
                                             })
                                             .on_hover({
                                                 let (panel, path) =
@@ -2100,8 +2248,8 @@ mod tests {
     use subwy_project::{fs::EntryKind, tree::Row};
 
     use super::{
-        CHEVRON_SLOT, clamp_width, column_x, hint_keys, name_selection, row_padding, rows_per_page,
-        tilde,
+        CHEVRON_SLOT, Entry, clamp_width, column_x, context_entries, hint_keys, name_selection,
+        row_padding, rows_per_page, tilde,
     };
 
     fn folder(expanded: bool, loops: bool) -> Row {
@@ -2154,6 +2302,25 @@ mod tests {
             labels(Some(&open)),
             ["Collapse", "First child", "Copy path"]
         );
+    }
+
+    #[test]
+    fn a_folder_of_the_window_is_not_renamed_or_trashed_from_its_menu() {
+        let flat = |own, several| -> Vec<Entry> {
+            context_entries(own, several)
+                .into_iter()
+                .flatten()
+                .collect()
+        };
+        let item = flat(false, false);
+        assert!(item.contains(&Entry::Rename) && item.contains(&Entry::Trash));
+        assert!(!item.contains(&Entry::RemoveFromWindow));
+        let folder = flat(true, false);
+        assert!(!folder.contains(&Entry::Rename) && !folder.contains(&Entry::Trash));
+        assert!(!folder.contains(&Entry::RemoveFromWindow));
+        // One of several folders leaves the window instead.
+        assert!(flat(true, true).contains(&Entry::RemoveFromWindow));
+        assert!(!flat(false, true).contains(&Entry::RemoveFromWindow));
     }
 
     #[test]

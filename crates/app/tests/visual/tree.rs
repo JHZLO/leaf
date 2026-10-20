@@ -17,6 +17,7 @@ pub fn run(check: &mut Check) {
     root_row(check);
     header(check);
     rename(check);
+    context_menu(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -219,6 +220,66 @@ fn header(check: &mut Check) {
     click(check, window, button(0.), y);
     let hidden = check.workspace(window, |w, cx| w.tree_expanded(cx));
     check.expect_eq("the minus hides the tree", hidden, None);
+}
+
+/// Right-click on a row opens its menu; arrows and Enter pick a line as a click would.
+fn context_menu(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // README.md is the sixth row: the folder, docs, src, target, .gitignore, README.md.
+    right_click(check, window, 100., row_y(5));
+    let selected = selection(check, window);
+    check.expect_eq(
+        "right-click selects the row",
+        selected,
+        Some(PathBuf::from("README.md")),
+    );
+    check.shot(window, "tree-9-context-menu");
+    // Nothing is highlighted at first; Down goes to New File, then New Directory, Copy Path,
+    // Copy Relative Path.
+    check.keys(window, "down down down down enter");
+    let copied = check.clipboard();
+    check.expect_eq(
+        "the menu's copy relative path copies the row's",
+        copied,
+        Some("README.md".into()),
+    );
+    // Rename… is the fifth line.
+    right_click(check, window, 100., row_y(5));
+    check.keys(
+        window,
+        "down down down down down enter cmd-a i n d e x . m d enter",
+    );
+    check.expect_eq(
+        "the menu's rename renames on disk",
+        fixture.path().join("index.md").is_file(),
+        true,
+    );
+    // New File on a folder's row names a file inside it.
+    right_click(check, window, 100., row_y(1));
+    check.keys(window, "down enter t o d o . m d enter");
+    check.expect_eq(
+        "the menu's new file makes it in the row's folder",
+        fixture.path().join("docs/todo.md").is_file(),
+        true,
+    );
+}
+
+/// The middle of the tree's row `index`, under the title bar and the tree's header.
+fn row_y(index: usize) -> f32 {
+    38. + 34. + 22. * index as f32 + 11.
+}
+
+fn right_click(check: &mut Check, window: AnyWindowHandle, x: f32, y: f32) {
+    let at = gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    let modifiers = gpui_kit::Modifiers::default();
+    check
+        .cx
+        .simulate_mouse_down(window, at, gpui_kit::MouseButton::Right, modifiers);
+    check
+        .cx
+        .simulate_mouse_up(window, at, gpui_kit::MouseButton::Right, modifiers);
+    check.cx.run_until_parked();
 }
 
 fn click(check: &mut Check, window: AnyWindowHandle, x: f32, y: f32) {

@@ -94,13 +94,8 @@ pub fn run(check: &mut Check) {
         .simulate_mouse_up(window, at, MouseButton::Right, Modifiers::default());
     check.cx.run_until_parked();
     check.shot(window, "folders-2-menu");
-    // The menu's one line: under the row, past its border and top padding.
-    let item = point(
-        px(6. + 24. + 12. + 40.),
-        px(row_y + ROW + 1. + 4. + ROW / 2.),
-    );
-    check.cx.simulate_click(window, item, Modifiers::default());
-    check.cx.run_until_parked();
+    // Remove from Window is the menu's last line; Up from the first goes round to it.
+    check.keys(window, "up enter");
     let left = check.workspace(window, |w, cx| w.folders(cx).map(|f| f.roots().to_vec()));
     check.expect_eq(
         "remove from window leaves the first folder",
