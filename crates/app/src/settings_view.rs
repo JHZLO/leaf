@@ -1,16 +1,22 @@
-//! The Settings tab (Cmd+,): the settings file's choices as switches, numbers and lists, applied to
-//! every window at once and written back to the file. Built on gpui-kit's settings page: a sidebar of
-//! pages with search, and a reset to the default beside each changed item.
+//! The Settings dialog (Cmd+,): the settings file's choices as switches, numbers and lists, applied
+//! to every window at once and written back to the file. Built on gpui-kit's settings page: a sidebar
+//! of pages with search, and a reset to the default beside each changed item.
 
 use gpui_kit::{
-    component::setting::{
-        NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings as Pages,
+    assets::IconName,
+    component::{
+        Icon,
+        setting::{
+            NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+            Settings as Pages,
+        },
     },
     *,
 };
 use subwy_project::settings::{Appearance, Settings, SoftWrap};
 
 use crate::{
+    keymap::{CloseSettings, SETTINGS},
     keymap_view::KeymapView,
     settings, theme,
     theme::{c, z},
@@ -29,6 +35,54 @@ impl SettingsView {
             keymap: cx.new(|cx| KeymapView::new(window, cx)),
         }
     }
+}
+
+impl EventEmitter<CloseSettings> for SettingsView {}
+
+/// The dialog's size at 100% zoom; a smaller window leaves a margin around it.
+const DIALOG_WIDTH: f32 = 960.;
+const DIALOG_HEIGHT: f32 = 680.;
+const DIALOG_MARGIN: f32 = 32.;
+const DIALOG_HEADER: f32 = 40.;
+
+/// The Settings dialog over the window: the window dimmed behind, the settings on a sheet of paper
+/// in the middle. `on_outside` runs for a click beside the sheet.
+pub fn dialog(
+    view: Entity<SettingsView>,
+    on_outside: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    window: &Window,
+    cx: &App,
+) -> impl IntoElement {
+    let p = theme::colors(cx);
+    let zoom = theme::zoom(cx);
+    let viewport = window.viewport_size();
+    let width = (DIALOG_WIDTH * zoom).min(viewport.width.as_f32() - 2. * DIALOG_MARGIN);
+    let height = (DIALOG_HEIGHT * zoom).min(viewport.height.as_f32() - 2. * DIALOG_MARGIN);
+    let dark = p.paper == theme::DARK.paper;
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .occlude()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(hsla(0., 0., 0., if dark { 0.5 } else { 0.25 }))
+        .on_mouse_down(MouseButton::Left, on_outside)
+        .child(
+            div()
+                .w(px(width.max(320.)))
+                .h(px(height.max(240.)))
+                .rounded(z(8., cx))
+                .border_1()
+                .border_color(c(p.line))
+                .bg(c(p.paper))
+                .overflow_hidden()
+                // A click on the sheet stays there.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(view),
+        )
 }
 
 impl Focusable for SettingsView {
@@ -349,17 +403,58 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
         div()
+            .key_context(SETTINGS)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|_, _: &CloseSettings, _, cx| cx.emit(CloseSettings)))
             .size_full()
+            .flex()
+            .flex_col()
             .bg(c(p.paper))
             .text_size(z(theme::size::UI_TEXT, cx))
-            .child(Pages::new("subwy-settings").pages([
-                editor_page(cx),
-                appearance_page(),
-                tree_page(),
-                terminal_page(),
-                startup_page(),
-                keymap_page(self.keymap.clone()),
-            ]))
+            .child(
+                div()
+                    .h(z(DIALOG_HEADER, cx))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(z(16., cx))
+                    .border_b_1()
+                    .border_color(c(p.line))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c(p.ink))
+                            .child("Settings"),
+                    )
+                    .child(
+                        div()
+                            .id("settings-close")
+                            .size(z(22., cx))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(z(4., cx))
+                            .text_color(c(p.sub))
+                            .hover(|style| style.bg(c(p.hover)).text_color(c(p.ink)))
+                            .child(Icon::new(IconName::X).size(z(14., cx)))
+                            .on_click(
+                                cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(CloseSettings)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(Pages::new("subwy-settings").pages([
+                        editor_page(cx),
+                        appearance_page(),
+                        tree_page(),
+                        terminal_page(),
+                        startup_page(),
+                        keymap_page(self.keymap.clone()),
+                    ])),
+            )
     }
 }

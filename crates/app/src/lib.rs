@@ -28,13 +28,13 @@ use std::{path::PathBuf, time::Duration};
 use gpui_kit::{App, AppContext as _, Global, Task};
 use subwy_project::settings::{self, Settings};
 
-/// The user's settings, read at startup and changed by the Settings tab, and why the file could
+/// The user's settings, read at startup and changed by the Settings dialog, and why the file could
 /// not be used, if it could not.
 pub struct UserSettings {
     pub settings: Settings,
     pub error: Option<String>,
     /// The file was read (or there was none). A file that could not be read is never written over:
-    /// changes made in the Settings tab then last until subwy quits.
+    /// changes made in the Settings dialog then last until subwy quits.
     writable: bool,
     /// Writes the file a moment after the last change; a newer change replaces it.
     saving: Task<()>,
@@ -49,7 +49,7 @@ pub fn settings(cx: &App) -> &Settings {
 /// How long the file waits after a change, so dragging a number writes it once.
 const SAVE_SETTINGS_AFTER: Duration = Duration::from_millis(300);
 
-/// Changes the settings (the Settings tab): every window shows the change at once, and the file
+/// Changes the settings (the Settings dialog): every window shows the change at once, and the file
 /// is written off the main thread a moment later.
 pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     let state = cx.global_mut::<UserSettings>();

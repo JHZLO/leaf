@@ -124,8 +124,8 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 
 ## Settings
 
-`Cmd+,` opens the Settings tab: switches, numbers and lists that apply to every window at once and are
-written to `~/Library/Application Support/subwy/settings.json`. subwy writes that file with the defaults on
+`Cmd+,` opens the Settings dialog over the window (`Esc` closes it): switches, numbers and lists that apply
+to every window at once and are written to `~/Library/Application Support/subwy/settings.json`. subwy writes that file with the defaults on
 first run; changes made to it by hand apply the next time subwy starts.
 
 ```json
@@ -157,7 +157,7 @@ first run; changes made to it by hand apply the next time subwy starts.
 `soft_wrap` is `markdown`, `all` or `none`; `appearance` is `system`, `light` or `dark`. An empty `terminal_shell`
 is your login shell, and a `null` `terminal_font_size` follows the editor's.
 
-The Settings tab's Keymap page lists every action with its keys: click a key and press the new one (`Esc`
+The Settings dialog's Keymap page lists every action with its keys: click a key and press the new one (`Esc`
 cancels), or remove or reset it. It writes `keymap` entries; one with `"unbind": true` takes a key away from
 an action, which is how a change replaces one of subwy's own keys. `show_ignored` set to `false` leaves gitignored items out of the tree
 (the tree's more menu switches it for the window). Entries in `keymap` are added after subwy's own keys, so they win.

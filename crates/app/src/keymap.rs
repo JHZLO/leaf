@@ -66,6 +66,11 @@ actions!(
     ]
 );
 
+/// The Settings dialog has focus.
+pub const SETTINGS: &str = "Settings";
+
+actions!(settings, [CloseSettings]);
+
 /// The terminal panel has focus.
 pub const TERMINAL: &str = "Terminal";
 
@@ -148,8 +153,10 @@ fn own_keys() -> Vec<Own> {
     let panel = Some(PROJECT_PANEL);
     vec![
         own("cmd-q", Quit, None),
-        // macOS's Settings key; in any window, the empty one too.
+        // macOS's Settings key; in any window, the empty one too. Again, it closes the dialog.
         own("cmd-,", OpenSettings, None),
+        own("escape", CloseSettings, Some(SETTINGS)),
+        own("cmd-w", CloseSettings, Some(SETTINGS)),
         own("cmd-o", OpenFolder, ws),
         own("cmd-shift-n", NewWindow, ws),
         own("cmd-1", FocusTree, ws),
@@ -230,7 +237,7 @@ fn own_keys() -> Vec<Own> {
     ]
 }
 
-/// subwy's own keys as the Settings tab's keymap lists them.
+/// subwy's own keys as the Settings dialog's keymap lists them.
 pub fn defaults() -> Vec<Binding> {
     own_keys()
         .into_iter()
@@ -249,7 +256,7 @@ struct KitKeys(Vec<KeyBinding>);
 impl Global for KitKeys {}
 
 /// Binds every key: gpui-kit's, subwy's own, then the user's from the settings, which win. Called
-/// once at start and again when the Settings tab changes the keymap.
+/// once at start and again when the Settings dialog changes the keymap.
 pub fn bind_all(cx: &mut App) -> Option<String> {
     let kit = match cx.try_global::<KitKeys>() {
         Some(kit) => kit.0.clone(),

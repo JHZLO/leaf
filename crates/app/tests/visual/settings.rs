@@ -1,5 +1,5 @@
-//! The Settings tab (Cmd+,): it opens beside the file tabs, its changes show at once and reach the
-//! settings file.
+//! The Settings dialog (Cmd+,): it opens over the window, closes with Escape, Cmd+W, Cmd+, or a
+//! click beside it, and its changes show at once and reach the settings file.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -18,11 +18,18 @@ pub fn run(check: &mut Check) {
         .cx
         .update(|cx| Theme::change(ThemeMode::Light, None, cx));
     check.keys(window, "down down right down down enter cmd-,");
-    let shown = check.workspace(window, |w, cx| w.settings_shown(cx));
-    check.expect_eq("cmd-, opens the Settings tab", shown, true);
+    let open = check.workspace(window, |w, _| w.settings_open());
+    check.expect_eq("cmd-, opens the Settings dialog", open, true);
     check.shot(window, "settings-1-editor");
     let active = check.workspace(window, |w, cx| w.active_file(cx));
-    check.expect_eq("no file is active behind it", active, None);
+    check.expect_eq(
+        "the file stays open behind it",
+        active,
+        Some(PathBuf::from("docs/notes.md")),
+    );
+    check.keys(window, "escape");
+    let open = check.workspace(window, |w, _| w.settings_open());
+    check.expect_eq("escape closes it", open, false);
 
     // A change applies at once and reaches the file.
     change(check, window, |s| s.tab_size = 2);
@@ -40,14 +47,6 @@ pub fn run(check: &mut Check) {
     );
     change(check, window, |s| s.tab_size = 4);
 
-    // Cmd+Shift+[ goes back to the file; Cmd+W on the Settings tab closes it.
-    check.keys(window, "cmd-shift-[");
-    let active = check.workspace(window, |w, cx| w.active_file(cx));
-    check.expect_eq(
-        "the tab before it is the file",
-        active,
-        Some(PathBuf::from("docs/notes.md")),
-    );
     // Open editors take editor changes at once: no line numbers, whitespace shown.
     change(check, window, |s| {
         s.line_numbers = false;
@@ -64,6 +63,9 @@ pub fn run(check: &mut Check) {
     check.expect_eq("appearance dark turns the paper dark", dark, true);
     check.keys(window, "cmd-,");
     check.shot(window, "settings-3-dark");
+    check.keys(window, "cmd-,");
+    let open = check.workspace(window, |w, _| w.settings_open());
+    check.expect_eq("cmd-, again closes it", open, false);
     // The editor font survives a change of appearance.
     change(check, window, |s| s.editor_font = "Menlo".into());
     change(check, window, |s| s.appearance = Appearance::Light);
@@ -79,30 +81,39 @@ pub fn run(check: &mut Check) {
     let dark = check.cx.update(|cx| Theme::global(cx).mode.is_dark());
     check.expect_eq("appearance light turns it light", dark, false);
     change(check, window, |s| s.appearance = Appearance::System);
-    check.keys(window, "cmd-shift-[");
-    // The Tree page, its switches on light paper.
+    // The Tree page, its switches; Cmd+W closes the dialog, not the file behind it.
     check.keys(window, "cmd-,");
-    let at = gpui_kit::point(gpui_kit::px(340.), gpui_kit::px(186.));
-    check
-        .cx
-        .simulate_click(window, at, gpui_kit::Modifiers::default());
+    click(check, window, SIDEBAR_X, page_y(2));
     check.shot(window, "settings-4-tree");
     check.keys(window, "cmd-w");
+    let state = check.workspace(window, |w, cx| (w.settings_open(), w.active_file(cx)));
+    check.expect_eq(
+        "cmd-w closes the dialog and leaves the file",
+        state,
+        (false, Some(PathBuf::from("docs/notes.md"))),
+    );
+    // A click beside the dialog closes it too.
+    check.keys(window, "cmd-,");
+    click(check, window, 40., 400.);
+    let open = check.workspace(window, |w, _| w.settings_open());
+    check.expect_eq("a click beside it closes it", open, false);
     keymap(check);
     tree_options(check);
     terminal_options(check);
-    check.keys(window, "cmd-, cmd-w");
-    let shown = check.workspace(window, |w, cx| w.settings_shown(cx));
-    check.expect_eq("cmd-w closes the Settings tab", shown, false);
-    let active = check.workspace(window, |w, cx| w.active_file(cx));
-    check.expect_eq(
-        "the file is in front again",
-        active,
-        Some(PathBuf::from("docs/notes.md")),
-    );
 }
 
-/// Changes the settings as the Settings tab's fields do. The change applies once the update that
+/// Where the dialog's settings page starts in a 1280 by 800 window: the dialog is 960 by 680 in the
+/// middle, under its 40 high title line, inside its border.
+const PAGE_LEFT: f32 = 160. + 1.;
+const PAGE_TOP: f32 = 60. + 40. + 1.;
+/// The sidebar's page list: its column, and the middle of the line of page `index`.
+const SIDEBAR_X: f32 = PAGE_LEFT + 28.;
+
+fn page_y(index: usize) -> f32 {
+    PAGE_TOP + 56. + 28.8 * index as f32
+}
+
+/// Changes the settings as the Settings dialog's fields do. The change applies once the update that
 /// made it ends, as after a click.
 fn change(check: &mut Check, window: AnyWindowHandle, edit: impl FnOnce(&mut Settings)) {
     check.update_workspace(window, |_, _, cx| subwy::update_settings(cx, edit));
@@ -160,15 +171,12 @@ fn keymap(check: &mut Check) {
     let before = check.cx.update(|cx| subwy::settings(cx).keymap.clone());
     check.keys(window, "cmd-,");
     // Keymap is the sixth page in the sidebar.
-    let page = gpui_kit::point(gpui_kit::px(340.), gpui_kit::px(272.));
-    check
-        .cx
-        .simulate_click(window, page, gpui_kit::Modifiers::default());
+    click(check, window, SIDEBAR_X, page_y(5));
     check.shot(window, "settings-5-keymap");
     // Search for Rename, click its key and press F2.
-    click(check, window, 915., 149.);
+    click(check, window, PAGE_LEFT + 603., PAGE_TOP + 77.);
     check.keys(window, "r e n a m e");
-    click(check, window, 1120., 216.);
+    click(check, window, PAGE_LEFT + 808., PAGE_TOP + 144.);
     check.shot(window, "settings-6-recording");
     check.keys(window, "f2");
     let keymap = check.cx.update(|cx| subwy::settings(cx).keymap.clone());

@@ -77,7 +77,7 @@ pub struct KeyOverride {
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
-    /// Takes `key` away from `action` instead of giving it: how the Settings tab replaces or
+    /// Takes `key` away from `action` instead of giving it: how the Settings dialog replaces or
     /// removes one of subwy's own keys.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unbind: bool,
@@ -276,7 +276,7 @@ fn validate(settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes the settings the Settings tab changed: to a file beside it first, then in its place, so
+/// Writes the settings the Settings dialog changed: to a file beside it first, then in its place, so
 /// a crash in between leaves the old file whole.
 pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
     if let Some(dir) = path.parent() {

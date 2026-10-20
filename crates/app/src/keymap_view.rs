@@ -1,4 +1,4 @@
-//! The Settings tab's Keymap page: every subwy action with the keys it answers to, a search, and a
+//! The Settings dialog's Keymap page: every subwy action with the keys it answers to, a search, and a
 //! recorder. Changing a key writes overrides into the settings (subwy's own key is taken away, the
 //! new one given) and the whole keymap is bound again at once.
 

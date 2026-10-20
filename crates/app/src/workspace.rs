@@ -14,13 +14,14 @@ use crate::{
     empty_state,
     finder::{self, Finder, FinderEvent},
     keymap::{
-        CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewTerminal,
-        NewWindow, NextTab, Open, OpenFolder, OpenSettings, PrevTab, Quit, RevealInFinder, Save,
-        SelectNext, SelectPrev, ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal,
-        WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        CloseSettings, CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusEditor, FocusTree,
+        NewTerminal, NewWindow, NextTab, Open, OpenFolder, OpenSettings, PrevTab, Quit,
+        RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview, ToggleSearch,
+        ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{DraggedItems, FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
+    settings_view::{self, SettingsView},
     status_bar::{self, COPIED_FOR, Copied, FADE, Status},
     terminal_tabs::{TerminalTabs, TerminalTabsEvent},
     theme::{self, ZOOM_STEPS, c, size, z},
@@ -41,6 +42,13 @@ enum OverlayView {
 
 /// The items a copy action copies, relative to the window, and the editor's selected lines.
 type CopySource = (Vec<PathBuf>, Option<(u32, u32)>);
+
+/// The Settings dialog and where focus goes back when it closes.
+struct SettingsDialog {
+    view: Entity<SettingsView>,
+    return_focus: Option<FocusHandle>,
+    _subscription: Subscription,
+}
 
 /// What the gap above the terminal drags; the terminal resizes as it moves.
 struct TerminalResize;
@@ -67,6 +75,8 @@ pub struct Workspace {
     /// The terminal's height at 100% zoom, dragged from the gap above it.
     terminal_height: f32,
     overlay: Option<Overlay>,
+    /// The Settings dialog (Cmd+,), over everything else.
+    settings: Option<SettingsDialog>,
     copied: Option<Copied>,
     copy_seq: u64,
     /// One per folder; dropping them stops watching.
@@ -302,7 +312,7 @@ fn live_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
         .unwrap_or_default()
 }
 
-/// The zoom changed in the Settings tab: the session keeps it, as with Cmd+= and Cmd+-.
+/// The zoom changed in the Settings dialog: the session keeps it, as with Cmd+= and Cmd+-.
 pub fn zoom_changed(cx: &mut App) {
     if let Some((_, workspace)) = live_windows(cx).into_iter().next() {
         workspace.update(cx, |workspace, cx| workspace.schedule_save(cx));
@@ -310,7 +320,7 @@ pub fn zoom_changed(cx: &mut App) {
     cx.refresh_windows();
 }
 
-/// The settings changed (the Settings tab): every window shows them at once.
+/// The settings changed (the Settings dialog): every window shows them at once.
 pub fn settings_changed(cx: &mut App) {
     theme::settings_changed(cx);
     for (handle, workspace) in live_windows(cx) {
@@ -387,6 +397,7 @@ impl Workspace {
             terminal: None,
             terminal_height: size::TERMINAL_HEIGHT,
             overlay: None,
+            settings: None,
             copied: None,
             copy_seq: 0,
             _watchers: Vec::new(),
@@ -875,11 +886,37 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Cmd+, : the Settings tab, in front with the keyboard.
+    /// Cmd+, : the Settings dialog over the window, with the keyboard; again, it closes.
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.is_some() {
+            self.close_settings(window, cx);
+            return;
+        }
         self.overlay = None;
-        self.tabs
-            .update(cx, |tabs, cx| tabs.open_settings(window, cx));
+        let view = cx.new(|cx| SettingsView::new(window, cx));
+        let subscription =
+            cx.subscribe_in(&view, window, |this, _, _: &CloseSettings, window, cx| {
+                this.close_settings(window, cx)
+            });
+        let return_focus = window.focused(cx);
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        self.settings = Some(SettingsDialog {
+            view,
+            return_focus,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    /// Closes the Settings dialog and gives focus back to where it was.
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = self.settings.take() else {
+            return;
+        };
+        match dialog.return_focus {
+            Some(handle) => handle.focus(window, cx),
+            None => self.focus_editor_area(window, cx),
+        }
         cx.notify();
     }
 
@@ -894,9 +931,9 @@ impl Workspace {
         self.tabs.read(cx).error.clone()
     }
 
-    /// Whether the Settings tab is in front; for the UI checks.
-    pub fn settings_shown(&self, cx: &App) -> bool {
-        self.tabs.read(cx).settings_shown()
+    /// Whether the Settings dialog is open; for the UI checks.
+    pub fn settings_open(&self) -> bool {
+        self.settings.is_some()
     }
 
     /// Every tab's file, in tab order; for the UI checks.
@@ -1577,13 +1614,8 @@ impl Render for Workspace {
                                         },
                                     ))
                                     .map(|el| match self.panel {
-                                        // The Settings tab opens in the empty window too.
-                                        _ if self.panel.is_some()
-                                            || self.tabs.read(cx).settings_shown() =>
-                                        {
-                                            el.child(self.tabs.clone())
-                                        }
-                                        _ => {
+                                        Some(_) => el.child(self.tabs.clone()),
+                                        None => {
                                             let this = cx.entity().downgrade();
                                             el.child(empty_state::render(
                                                 &self.recent_shown(cx),
@@ -1667,6 +1699,18 @@ impl Render for Workspace {
             .when_some(self.overlay.as_ref(), |el, overlay| match &overlay.view {
                 OverlayView::Finder(view) => el.child(finder::overlay(view.clone(), cx)),
                 OverlayView::Search(view) => el.child(search_panel::overlay(view.clone(), cx)),
+            })
+            .when_some(self.settings.as_ref(), |el, dialog| {
+                // A click beside the dialog closes it.
+                let close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.close_settings(window, cx)
+                });
+                el.child(settings_view::dialog(
+                    dialog.view.clone(),
+                    close,
+                    window,
+                    cx,
+                ))
             })
     }
 }
