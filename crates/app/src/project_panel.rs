@@ -168,6 +168,7 @@ enum Entry {
     Trash,
     RevealInFinder,
     OpenInTerminal,
+    OpenInDefaultApp,
     RemoveFromWindow,
 }
 
@@ -189,6 +190,7 @@ impl Entry {
             Entry::Trash => "Move to Trash",
             Entry::RevealInFinder => "Reveal in Finder",
             Entry::OpenInTerminal => "Open in Terminal",
+            Entry::OpenInDefaultApp => "Open in Default App",
             Entry::RemoveFromWindow => "Remove from Window",
         }
     }
@@ -247,7 +249,11 @@ fn context_entries(folder: bool, own_folder: bool, several: bool) -> Vec<Vec<Ent
     } else {
         vec![Entry::Rename, Entry::CopyTo, Entry::MoveTo, Entry::Trash]
     });
-    groups.push(vec![Entry::RevealInFinder, Entry::OpenInTerminal]);
+    let mut open = vec![Entry::RevealInFinder, Entry::OpenInTerminal];
+    if !folder {
+        open.push(Entry::OpenInDefaultApp);
+    }
+    groups.push(open);
     if own_folder && several {
         groups.push(vec![Entry::RemoveFromWindow]);
     }
@@ -1035,6 +1041,11 @@ impl ProjectPanel {
             Entry::Trash => self.trash(window, cx),
             Entry::RevealInFinder => window.dispatch_action(Box::new(RevealInFinder), cx),
             Entry::OpenInTerminal => self.open_in_terminal(cx),
+            Entry::OpenInDefaultApp => {
+                if let Some(abs) = self.folders.absolute(&path) {
+                    crate::workspace::open_with_system(&abs, cx);
+                }
+            }
             Entry::RemoveFromWindow => cx.emit(PanelEvent::RemoveFolder(path)),
         }
         cx.notify();

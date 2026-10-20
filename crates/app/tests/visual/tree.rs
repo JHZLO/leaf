@@ -23,6 +23,7 @@ pub fn run(check: &mut Check) {
     copy_move(check);
     drag_and_drop(check);
     open_in_terminal(check);
+    binary(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -555,6 +556,35 @@ fn open_in_terminal(check: &mut Check) {
         lines.iter().any(|line| line.ends_with("/docs"))
     });
     check.expect_eq("the shell runs in the row's folder", here, true);
+}
+
+/// Enter on a binary file hands it to its own app instead of refusing it; Space only says what it
+/// is (the offscreen checks launch nothing).
+fn binary(check: &mut Check) {
+    let fixture = fixture();
+    std::fs::write(
+        fixture.path().join("image.png"),
+        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR",
+    )
+    .expect("write");
+    let window = open_light(check, fixture.path());
+    // Rows: the folder, docs, src, target, .gitignore, image.png, README.md.
+    check.keys(window, "end up space");
+    let message = check.workspace(window, |w, cx| w.tabs_message(cx));
+    check.expect_eq(
+        "space on a binary file only says what it is",
+        message,
+        Some("image.png: binary file".into()),
+    );
+    check.keys(window, "enter");
+    let message = check.workspace(window, |w, cx| w.tabs_message(cx));
+    check.expect_eq(
+        "enter hands a binary file to the default app",
+        message,
+        Some("image.png: opened in the default app".into()),
+    );
+    let open = check.workspace(window, |w, cx| w.open_files(cx));
+    check.expect_eq("no tab opens for it", open, Vec::<PathBuf>::new());
 }
 
 fn click_with(

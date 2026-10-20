@@ -99,10 +99,18 @@ struct OpenWindow {
     saved: Option<session::WindowState>,
 }
 
-/// Set by the offscreen UI checks: windows subwy opens itself then stay off screen and never take focus.
+/// Set by the offscreen UI checks: windows subwy opens itself then stay off screen and never take
+/// focus, and no file is handed to another app.
 pub struct OffscreenWindows;
 
 impl Global for OffscreenWindows {}
+
+/// Opens `path` (on disk) in the app macOS opens it with, as a double click in Finder does.
+pub(crate) fn open_with_system(path: &Path, cx: &App) {
+    if !cx.has_global::<OffscreenWindows>() {
+        cx.open_with_system(path);
+    }
+}
 
 /// How far each new window sits from the last one.
 const CASCADE: f32 = 25.;
@@ -836,6 +844,12 @@ impl Workspace {
     /// The active tab's file, relative to the open folder.
     pub fn active_file(&self, cx: &App) -> Option<PathBuf> {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
+    }
+
+    /// What the status bar says in place of a path (a file that did not open as text); for the UI
+    /// checks.
+    pub fn tabs_message(&self, cx: &App) -> Option<String> {
+        self.tabs.read(cx).error.clone()
     }
 
     /// Every tab's file, in tab order; for the UI checks.

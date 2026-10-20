@@ -374,6 +374,15 @@ impl EditorTabs {
         } = self.pending.remove(ix);
         let file = match file {
             Ok(file) => file,
+            // An image or a PDF goes to its own app, as from Finder; Space only says what it is,
+            // so walking the tree never brings another app to the front.
+            Err(ReadError::Binary) if !pass_through => {
+                crate::workspace::open_with_system(&self.abs(&path), cx);
+                self.error = Some(format!("{}: opened in the default app", path.display()));
+                cx.emit(TabsChanged);
+                cx.notify();
+                return;
+            }
             Err(err) => {
                 self.error = Some(format!("{}: {err}", path.display()));
                 cx.emit(TabsChanged);

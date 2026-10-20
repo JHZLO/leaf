@@ -44,6 +44,9 @@ fn main() {
         std::sync::Arc::new(subwy::icons::SubwyAssets),
     );
     cx.update(subwy::init);
+    // Windows subwy opens by itself (not through Check::open) stay off screen as well, and no
+    // file is handed to another app.
+    cx.update(|cx| cx.set_global(subwy::workspace::OffscreenWindows));
     // An offscreen window draws only on input, so the tree's route is shot where it settles.
     cx.update(|cx| cx.set_reduce_motion(true));
     let mut check = check::Check {

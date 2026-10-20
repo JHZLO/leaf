@@ -6,15 +6,12 @@ use std::{
 };
 
 use gpui_kit::AnyWindowHandle;
-use subwy::workspace::{self, OffscreenWindows};
+use subwy::workspace;
 use subwy_project::session;
 
 use crate::check::{Check, fixture};
 
 pub fn run(check: &mut Check) {
-    // Windows subwy opens by itself (not through Check::open) stay off screen as well.
-    check.cx.update(|cx| cx.set_global(OffscreenWindows));
-
     let notes = fixture();
     let code = fixture();
     let notes_root = notes.path().canonicalize().expect("root");
