@@ -9,6 +9,7 @@ mod empty_state;
 mod finder;
 pub mod icons;
 pub mod keymap;
+mod keymap_view;
 mod menus;
 mod preview;
 mod project_panel;
@@ -52,8 +53,16 @@ const SAVE_SETTINGS_AFTER: Duration = Duration::from_millis(300);
 /// is written off the main thread a moment later.
 pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     let state = cx.global_mut::<UserSettings>();
+    let keymap_before = state.settings.keymap.clone();
     change(&mut state.settings);
     let (settings, writable) = (state.settings.clone(), state.writable);
+    if settings.keymap != keymap_before {
+        // The menus show each action's key, so they are set again over the new keymap.
+        if let Some(problem) = keymap::bind_all(cx) {
+            eprintln!("subwy: {problem}");
+        }
+        menus::init(cx);
+    }
     if writable {
         let saving = cx.spawn(async move |cx| {
             cx.background_executor().timer(SAVE_SETTINGS_AFTER).await;
@@ -75,7 +84,6 @@ pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 /// tests start from.
 pub fn init(cx: &mut App) {
     let (settings, error) = settings::load(&settings::default_path());
-    let overrides = settings.keymap.clone();
     cx.set_global(UserSettings {
         settings,
         writable: error.is_none(),
@@ -84,9 +92,8 @@ pub fn init(cx: &mut App) {
     });
     gpui_kit::init(cx);
     theme::init(cx);
-    keymap::init(cx);
-    // Bound after subwy's own keys so the user's win.
-    if let Some(problem) = keymap::bind_overrides(&overrides, cx) {
+    // The user's keys are bound after subwy's own, so they win.
+    if let Some(problem) = keymap::bind_all(cx) {
         let state = cx.global_mut::<UserSettings>();
         state.error.get_or_insert(problem);
     }

@@ -155,7 +155,11 @@ first run; changes made to it by hand apply the next time subwy starts.
 ```
 
 `soft_wrap` is `markdown`, `all` or `none`; `appearance` is `system`, `light` or `dark`. An empty `terminal_shell`
-is your login shell, and a `null` `terminal_font_size` follows the editor's. `show_ignored` set to `false` leaves gitignored items out of the tree
+is your login shell, and a `null` `terminal_font_size` follows the editor's.
+
+The Settings tab's Keymap page lists every action with its keys: click a key and press the new one (`Esc`
+cancels), or remove or reset it. It writes `keymap` entries; one with `"unbind": true` takes a key away from
+an action, which is how a change replaces one of subwy's own keys. `show_ignored` set to `false` leaves gitignored items out of the tree
 (the tree's more menu switches it for the window). Entries in `keymap` are added after subwy's own keys, so they win.
 A file that does not parse is ignored (with the reason in the status bar) and the defaults are used.
 

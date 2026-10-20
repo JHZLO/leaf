@@ -88,6 +88,7 @@ pub fn run(check: &mut Check) {
         .simulate_click(window, at, gpui_kit::Modifiers::default());
     check.shot(window, "settings-4-tree");
     check.keys(window, "cmd-w");
+    keymap(check);
     tree_options(check);
     terminal_options(check);
     check.keys(window, "cmd-, cmd-w");
@@ -150,4 +151,62 @@ fn terminal_options(check: &mut Check) {
     let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
     check.expect_eq("alt-f12 still starts one", tabs, 1);
     change(check, window, |s| s.terminal_on_start = true);
+}
+
+/// The Keymap page: search an action, click its key, press the new one.
+fn keymap(check: &mut Check) {
+    let first = fixture();
+    let window = check.open(Some(first.path()));
+    let before = check.cx.update(|cx| subwy::settings(cx).keymap.clone());
+    check.keys(window, "cmd-,");
+    // Keymap is the sixth page in the sidebar.
+    let page = gpui_kit::point(gpui_kit::px(340.), gpui_kit::px(272.));
+    check
+        .cx
+        .simulate_click(window, page, gpui_kit::Modifiers::default());
+    check.shot(window, "settings-5-keymap");
+    // Search for Rename, click its key and press F2.
+    click(check, window, 915., 149.);
+    check.keys(window, "r e n a m e");
+    click(check, window, 1120., 216.);
+    check.shot(window, "settings-6-recording");
+    check.keys(window, "f2");
+    let keymap = check.cx.update(|cx| subwy::settings(cx).keymap.clone());
+    let given = keymap
+        .iter()
+        .any(|o| o.action == "project_panel::Rename" && o.key == "f2" && !o.unbind);
+    check.expect_eq("a recorded key goes into the settings", given, true);
+    check.shot(window, "settings-7-recorded");
+    check.keys(window, "cmd-w");
+    // Each try in a window of its own, the tree in front: Shift+F6 no longer renames (x starts a
+    // speed search instead), F2 does.
+    let (old, new) = (fixture(), fixture());
+    let window = check.open(Some(old.path()));
+    check.keys(window, "end shift-f6 x enter");
+    let readme = old.path().join("README.md");
+    check.wait_until(|check| {
+        check.workspace(window, |w, cx| w.active_file(cx)) == Some(PathBuf::from("README.md"))
+    });
+    check.expect_eq("the old key is gone", readme.is_file(), true);
+    let window = check.open(Some(new.path()));
+    check.keys(window, "end f2 cmd-a n e w . m d enter");
+    let renamed = new.path().join("new.md");
+    check.wait_until(|_| renamed.is_file());
+    check.expect_eq("the new key renames", renamed.is_file(), true);
+    // Reset: the own key is back.
+    let back = fixture();
+    let window = check.open(Some(back.path()));
+    change(check, window, |s| s.keymap = before);
+    check.keys(window, "end shift-f6 cmd-a i n d e x . m d enter");
+    let index = back.path().join("index.md");
+    check.wait_until(|_| index.is_file());
+    check.expect_eq("a reset brings the own key back", index.is_file(), true);
+}
+
+fn click(check: &mut Check, window: AnyWindowHandle, x: f32, y: f32) {
+    let at = gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    check
+        .cx
+        .simulate_click(window, at, gpui_kit::Modifiers::default());
+    check.cx.run_until_parked();
 }

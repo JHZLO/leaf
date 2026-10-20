@@ -11,6 +11,7 @@ use gpui_kit::{
 use subwy_project::settings::{Appearance, Settings, SoftWrap};
 
 use crate::{
+    keymap_view::KeymapView,
     settings, theme,
     theme::{c, z},
     update_settings,
@@ -18,12 +19,14 @@ use crate::{
 
 pub struct SettingsView {
     focus_handle: FocusHandle,
+    keymap: Entity<KeymapView>,
 }
 
 impl SettingsView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            keymap: cx.new(|cx| KeymapView::new(window, cx)),
         }
     }
 }
@@ -333,6 +336,15 @@ fn startup_page() -> SettingPage {
     )))
 }
 
+fn keymap_page(view: Entity<KeymapView>) -> SettingPage {
+    SettingPage::new("Keymap").group(
+        SettingGroup::new().item(
+            SettingItem::render(move |_, _, _| view.clone())
+                .keywords(["key", "shortcut", "binding", "keymap"]),
+        ),
+    )
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
@@ -347,6 +359,7 @@ impl Render for SettingsView {
                 tree_page(),
                 terminal_page(),
                 startup_page(),
+                keymap_page(self.keymap.clone()),
             ]))
     }
 }

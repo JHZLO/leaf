@@ -77,6 +77,123 @@ pub struct KeyOverride {
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Takes `key` away from `action` instead of giving it: how the Settings tab replaces or
+    /// removes one of subwy's own keys.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unbind: bool,
+}
+
+/// A key binding as the keymap page reasons about it: one of subwy's own, or one that works now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Binding {
+    pub key: String,
+    pub action: String,
+    pub context: Option<String>,
+}
+
+/// The keys that work now, given subwy's own (`defaults`) and the user's `overrides`: the defaults
+/// not taken away, then the ones the overrides give.
+pub fn effective_keys(defaults: &[Binding], overrides: &[KeyOverride]) -> Vec<Binding> {
+    let taken = |binding: &Binding| {
+        overrides.iter().any(|o| {
+            o.unbind
+                && o.key == binding.key
+                && o.action == binding.action
+                && o.context == binding.context
+        })
+    };
+    let mut keys: Vec<Binding> = defaults.iter().filter(|b| !taken(b)).cloned().collect();
+    keys.extend(overrides.iter().filter(|o| !o.unbind).map(|o| Binding {
+        key: o.key.clone(),
+        action: o.action.clone(),
+        context: o.context.clone(),
+    }));
+    keys
+}
+
+/// The keys `action` answers to now, each once.
+pub fn keys_for(defaults: &[Binding], overrides: &[KeyOverride], action: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for binding in effective_keys(defaults, overrides) {
+        if binding.action == action && !keys.contains(&binding.key) {
+            keys.push(binding.key);
+        }
+    }
+    keys
+}
+
+/// Other actions that `key` also runs where `action` has it: a clash the keymap page points out.
+pub fn clashes(
+    defaults: &[Binding],
+    overrides: &[KeyOverride],
+    action: &str,
+    key: &str,
+) -> Vec<String> {
+    let keys = effective_keys(defaults, overrides);
+    let contexts: Vec<&Option<String>> = keys
+        .iter()
+        .filter(|b| b.action == action && b.key == key)
+        .map(|b| &b.context)
+        .collect();
+    let mut others: Vec<String> = Vec::new();
+    for binding in &keys {
+        if binding.key == key
+            && binding.action != action
+            && contexts.contains(&&binding.context)
+            && !others.contains(&binding.action)
+        {
+            others.push(binding.action.clone());
+        }
+    }
+    others
+}
+
+/// Gives `action` the one key `key`, in every context its own keys work in (`fallback` when it
+/// has none): its own keys are taken away and earlier changes to it dropped.
+pub fn set_key(
+    overrides: &mut Vec<KeyOverride>,
+    defaults: &[Binding],
+    action: &str,
+    fallback: Option<&str>,
+    key: &str,
+) {
+    clear_keys(overrides, defaults, action);
+    let mut contexts: Vec<Option<String>> = Vec::new();
+    for binding in defaults.iter().filter(|b| b.action == action) {
+        if !contexts.contains(&binding.context) {
+            contexts.push(binding.context.clone());
+        }
+    }
+    if contexts.is_empty() {
+        contexts.push(fallback.map(str::to_string));
+    }
+    overrides.extend(contexts.into_iter().map(|context| KeyOverride {
+        key: key.to_string(),
+        action: action.to_string(),
+        context,
+        unbind: false,
+    }));
+}
+
+/// Leaves `action` without a key.
+pub fn clear_keys(overrides: &mut Vec<KeyOverride>, defaults: &[Binding], action: &str) {
+    reset_keys(overrides, action);
+    overrides.extend(
+        defaults
+            .iter()
+            .filter(|b| b.action == action)
+            .map(|b| KeyOverride {
+                key: b.key.clone(),
+                action: action.to_string(),
+                context: b.context.clone(),
+                unbind: true,
+            }),
+    );
+}
+
+/// Back to subwy's own keys for `action`.
+pub fn reset_keys(overrides: &mut Vec<KeyOverride>, action: &str) {
+    overrides.retain(|o| o.action != action);
 }
 
 impl Default for Settings {
@@ -319,5 +436,123 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["settings.json"]);
+    }
+
+    fn binding(key: &str, action: &str, context: Option<&str>) -> Binding {
+        Binding {
+            key: key.into(),
+            action: action.into(),
+            context: context.map(Into::into),
+        }
+    }
+
+    fn defaults() -> Vec<Binding> {
+        vec![
+            binding("cmd-shift-f", "workspace::ToggleSearch", Some("Workspace")),
+            binding("cmd-shift-f", "workspace::ToggleSearch", Some("Input")),
+            binding("cmd-n", "project_panel::NewFile", Some("ProjectPanel")),
+            binding("cmd-c", "project_panel::CopyItems", Some("ProjectPanel")),
+        ]
+    }
+
+    #[test]
+    fn a_new_key_replaces_the_own_ones_in_every_context() {
+        let mut overrides = Vec::new();
+        set_key(
+            &mut overrides,
+            &defaults(),
+            "workspace::ToggleSearch",
+            Some("Workspace"),
+            "cmd-alt-f",
+        );
+        assert_eq!(
+            keys_for(&defaults(), &overrides, "workspace::ToggleSearch"),
+            ["cmd-alt-f"]
+        );
+        // Taken away and given in both contexts the default had.
+        assert_eq!(overrides.len(), 4);
+        assert_eq!(overrides.iter().filter(|o| o.unbind).count(), 2);
+        // Another change replaces the first one rather than piling up.
+        set_key(
+            &mut overrides,
+            &defaults(),
+            "workspace::ToggleSearch",
+            Some("Workspace"),
+            "f3",
+        );
+        assert_eq!(
+            keys_for(&defaults(), &overrides, "workspace::ToggleSearch"),
+            ["f3"]
+        );
+        assert_eq!(overrides.len(), 4);
+    }
+
+    #[test]
+    fn an_action_without_a_key_gets_one_in_its_fallback_context() {
+        let mut overrides = Vec::new();
+        set_key(
+            &mut overrides,
+            &defaults(),
+            "project_panel::CopyTo",
+            Some("ProjectPanel"),
+            "f5",
+        );
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].context.as_deref(), Some("ProjectPanel"));
+    }
+
+    #[test]
+    fn keys_clear_and_reset() {
+        let mut overrides = Vec::new();
+        clear_keys(&mut overrides, &defaults(), "project_panel::NewFile");
+        assert!(keys_for(&defaults(), &overrides, "project_panel::NewFile").is_empty());
+        reset_keys(&mut overrides, "project_panel::NewFile");
+        assert_eq!(
+            keys_for(&defaults(), &overrides, "project_panel::NewFile"),
+            ["cmd-n"]
+        );
+        assert!(overrides.is_empty());
+    }
+
+    #[test]
+    fn a_clash_is_the_same_key_in_the_same_context() {
+        let mut overrides = Vec::new();
+        set_key(
+            &mut overrides,
+            &defaults(),
+            "project_panel::NewFile",
+            Some("ProjectPanel"),
+            "cmd-c",
+        );
+        assert_eq!(
+            clashes(&defaults(), &overrides, "project_panel::NewFile", "cmd-c"),
+            ["project_panel::CopyItems"]
+        );
+        // The same key in another context is no clash.
+        assert!(
+            clashes(
+                &defaults(),
+                &overrides,
+                "workspace::ToggleSearch",
+                "cmd-shift-f"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unbind_entry_reads_and_writes_only_when_set() {
+        let entry = KeyOverride {
+            key: "cmd-n".into(),
+            action: "project_panel::NewFile".into(),
+            context: None,
+            unbind: false,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("unbind"));
+        let read: KeyOverride =
+            serde_json::from_str(r#"{ "key": "cmd-n", "action": "a::B", "unbind": true }"#)
+                .unwrap();
+        assert!(read.unbind);
     }
 }

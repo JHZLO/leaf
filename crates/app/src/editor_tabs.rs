@@ -248,7 +248,7 @@ impl EditorTabs {
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = self
             .settings
-            .get_or_insert_with(|| cx.new(SettingsView::new))
+            .get_or_insert_with(|| cx.new(|cx| SettingsView::new(window, cx)))
             .clone();
         self.settings_shown = true;
         view.read(cx).focus_handle(cx).focus(window, cx);

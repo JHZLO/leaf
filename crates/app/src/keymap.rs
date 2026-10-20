@@ -1,6 +1,7 @@
 //! Every key binding in subwy, in one table (IntelliJ keys; the design doc's keymap section).
 
 use gpui_kit::*;
+use subwy_project::settings::{Binding, KeyOverride};
 
 /// Anywhere in the window.
 pub const WORKSPACE: &str = "Workspace";
@@ -93,34 +94,36 @@ actions!(
 );
 
 /// Binds the user's extra keys from the settings file. Returns the first one that could not be bound.
-pub fn bind_overrides(
-    overrides: &[subwy_project::settings::KeyOverride],
-    cx: &mut App,
-) -> Option<String> {
+pub fn bind_overrides(overrides: &[KeyOverride], cx: &mut App) -> Option<String> {
     let mut problem = None;
     let mut bindings = Vec::new();
     for entry in overrides {
-        let binding = cx
+        let action = cx
             .build_action(&entry.action, None)
             .map_err(|err| format!("unknown action {}: {err}", entry.action))
-            .and_then(|action| {
-                let context = match &entry.context {
-                    Some(source) => Some(std::rc::Rc::new(
-                        KeyBindingContextPredicate::parse(source)
-                            .map_err(|err| format!("context {source}: {err}"))?,
-                    )),
-                    None => None,
-                };
-                KeyBinding::load(
-                    &entry.key,
-                    action,
-                    context,
-                    false,
-                    None,
-                    cx.keyboard_mapper().as_ref(),
-                )
-                .map_err(|err| format!("key {}: {err}", entry.key))
+            // An unbind entry takes the key away from the action rather than running it.
+            .map(|action| match entry.unbind {
+                true => Box::new(Unbind(action.name().into())) as Box<dyn Action>,
+                false => action,
             });
+        let binding = action.and_then(|action| {
+            let context = match &entry.context {
+                Some(source) => Some(std::rc::Rc::new(
+                    KeyBindingContextPredicate::parse(source)
+                        .map_err(|err| format!("context {source}: {err}"))?,
+                )),
+                None => None,
+            };
+            KeyBinding::load(
+                &entry.key,
+                action,
+                context,
+                false,
+                None,
+                cx.keyboard_mapper().as_ref(),
+            )
+            .map_err(|err| format!("key {}: {err}", entry.key))
+        });
         match binding {
             Ok(binding) => bindings.push(binding),
             Err(err) => {
@@ -132,89 +135,149 @@ pub fn bind_overrides(
     problem
 }
 
-pub fn init(cx: &mut App) {
+/// One of subwy's own keys: the key, what it does, and where it works.
+type Own = (&'static str, Box<dyn Action>, Option<&'static str>);
+
+fn own(key: &'static str, action: impl Action, context: Option<&'static str>) -> Own {
+    (key, Box::new(action), context)
+}
+
+/// Every key subwy binds itself, in binding order (a later binding wins a tie).
+fn own_keys() -> Vec<Own> {
     let ws = Some(WORKSPACE);
     let panel = Some(PROJECT_PANEL);
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
+    vec![
+        own("cmd-q", Quit, None),
         // macOS's Settings key; in any window, the empty one too.
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-o", OpenFolder, ws),
-        KeyBinding::new("cmd-shift-n", NewWindow, ws),
-        KeyBinding::new("cmd-1", FocusTree, ws),
-        KeyBinding::new("cmd-shift-c", CopyPath, ws),
-        KeyBinding::new("cmd-alt-shift-c", CopyRelativePath, ws),
-        KeyBinding::new("cmd-s", Save, ws),
-        KeyBinding::new("cmd-w", CloseTab, ws),
-        KeyBinding::new("cmd-shift-[", PrevTab, ws),
-        KeyBinding::new("cmd-shift-]", NextTab, ws),
-        KeyBinding::new("cmd-shift-v", TogglePreview, ws),
-        KeyBinding::new("cmd-=", ZoomIn, ws),
-        KeyBinding::new("cmd-+", ZoomIn, ws),
-        KeyBinding::new("cmd--", ZoomOut, ws),
-        KeyBinding::new("cmd-0", ZoomReset, ws),
-        KeyBinding::new("up", SelectPrev, panel),
-        KeyBinding::new("down", SelectNext, panel),
-        KeyBinding::new("shift-up", ExtendPrev, panel),
-        KeyBinding::new("shift-down", ExtendNext, panel),
-        KeyBinding::new("right", Expand, panel),
-        KeyBinding::new("left", Collapse, panel),
-        KeyBinding::new("home", SelectFirst, panel),
-        KeyBinding::new("end", SelectLast, panel),
-        KeyBinding::new("pageup", PageUp, panel),
-        KeyBinding::new("pagedown", PageDown, panel),
-        KeyBinding::new("enter", Open, panel),
-        KeyBinding::new("space", PassThrough, panel),
-        KeyBinding::new("cmd-f", SpeedSearch, panel),
-        KeyBinding::new("escape", FocusEditor, panel),
-        KeyBinding::new("cmd-shift-o", ToggleFinder, ws),
-        KeyBinding::new("cmd-shift-f", ToggleSearch, ws),
+        own("cmd-,", OpenSettings, None),
+        own("cmd-o", OpenFolder, ws),
+        own("cmd-shift-n", NewWindow, ws),
+        own("cmd-1", FocusTree, ws),
+        own("cmd-shift-c", CopyPath, ws),
+        own("cmd-alt-shift-c", CopyRelativePath, ws),
+        own("cmd-s", Save, ws),
+        own("cmd-w", CloseTab, ws),
+        own("cmd-shift-[", PrevTab, ws),
+        own("cmd-shift-]", NextTab, ws),
+        own("cmd-shift-v", TogglePreview, ws),
+        own("cmd-=", ZoomIn, ws),
+        own("cmd-+", ZoomIn, ws),
+        own("cmd--", ZoomOut, ws),
+        own("cmd-0", ZoomReset, ws),
+        own("up", SelectPrev, panel),
+        own("down", SelectNext, panel),
+        own("shift-up", ExtendPrev, panel),
+        own("shift-down", ExtendNext, panel),
+        own("right", Expand, panel),
+        own("left", Collapse, panel),
+        own("home", SelectFirst, panel),
+        own("end", SelectLast, panel),
+        own("pageup", PageUp, panel),
+        own("pagedown", PageDown, panel),
+        own("enter", Open, panel),
+        own("space", PassThrough, panel),
+        own("cmd-f", SpeedSearch, panel),
+        own("escape", FocusEditor, panel),
+        own("cmd-shift-o", ToggleFinder, ws),
+        own("cmd-shift-f", ToggleSearch, ws),
         // gpui-kit binds cmd-shift-f to replace inside its editor ("Input"), which would win there; the
         // folder search takes it, and replace moves to cmd-r as in IntelliJ.
-        KeyBinding::new("cmd-shift-f", ToggleSearch, Some("Input")),
-        KeyBinding::new("cmd-r", gpui_kit::component::input::Replace, Some("Input")),
-        KeyBinding::new("cmd-alt-r", RevealInFinder, ws),
-        KeyBinding::new("cmd-n", NewFile, panel),
-        KeyBinding::new("shift-f6", Rename, panel),
-        KeyBinding::new("cmd-backspace", Trash, panel),
-        KeyBinding::new("cmd-x", CutItems, panel),
-        KeyBinding::new("cmd-c", CopyItems, panel),
-        KeyBinding::new("cmd-v", PasteItems, panel),
-        KeyBinding::new("f5", CopyTo, panel),
-        KeyBinding::new("f6", MoveTo, panel),
+        own("cmd-shift-f", ToggleSearch, Some("Input")),
+        own("cmd-r", gpui_kit::component::input::Replace, Some("Input")),
+        own("cmd-alt-r", RevealInFinder, ws),
+        own("cmd-n", NewFile, panel),
+        own("shift-f6", Rename, panel),
+        own("cmd-backspace", Trash, panel),
+        own("cmd-x", CutItems, panel),
+        own("cmd-c", CopyItems, panel),
+        own("cmd-v", PasteItems, panel),
+        own("f5", CopyTo, panel),
+        own("f6", MoveTo, panel),
         // IntelliJ's Expand All and Collapse All. Cmd+Shift+= also reads as Cmd++, which zooms in
         // elsewhere; in the tree it expands, and Cmd+= still zooms.
-        KeyBinding::new("cmd-shift-=", ExpandAll, panel),
-        KeyBinding::new("cmd-+", ExpandAll, panel),
-        KeyBinding::new("cmd-shift--", CollapseAll, panel),
-        KeyBinding::new("cmd-_", CollapseAll, panel),
+        own("cmd-shift-=", ExpandAll, panel),
+        own("cmd-+", ExpandAll, panel),
+        own("cmd-shift--", CollapseAll, panel),
+        own("cmd-_", CollapseAll, panel),
         // A name being typed has its own Cmd+Z: its input is deeper and wins.
-        KeyBinding::new("cmd-z", UndoChange, panel),
+        own("cmd-z", UndoChange, panel),
         // The recent folders on the empty window.
-        KeyBinding::new("up", SelectPrev, Some("Workspace && empty")),
-        KeyBinding::new("down", SelectNext, Some("Workspace && empty")),
-        KeyBinding::new("enter", Open, Some("Workspace && empty")),
+        own("up", SelectPrev, Some("Workspace && empty")),
+        own("down", SelectNext, Some("Workspace && empty")),
+        own("enter", Open, Some("Workspace && empty")),
         // Markdown editing keys (Phase 2) go below this line, in their own block.
         // gpui-kit binds enter and tab on its editor element ("Input"), deeper than any container.
         // These match that same element, so they tie on depth and, added later, run first. When a
         // line is not a list item the handler propagates and GPUI moves on to gpui-kit's binding.
-        KeyBinding::new("enter", Newline, Some(MARKDOWN_EDITOR)),
-        KeyBinding::new("tab", IndentItem, Some(MARKDOWN_EDITOR)),
-        KeyBinding::new("shift-tab", OutdentItem, Some(MARKDOWN_EDITOR)),
-        KeyBinding::new("cmd-b", ToggleBold, Some(MARKDOWN_EDITOR)),
-        KeyBinding::new("cmd-i", ToggleItalic, Some(MARKDOWN_EDITOR)),
+        own("enter", Newline, Some(MARKDOWN_EDITOR)),
+        own("tab", IndentItem, Some(MARKDOWN_EDITOR)),
+        own("shift-tab", OutdentItem, Some(MARKDOWN_EDITOR)),
+        own("cmd-b", ToggleBold, Some(MARKDOWN_EDITOR)),
+        own("cmd-i", ToggleItalic, Some(MARKDOWN_EDITOR)),
         // The terminal (IntelliJ's Alt+F12). Keys without a binding go to the shell.
-        KeyBinding::new("alt-f12", ToggleTerminal, ws),
-        KeyBinding::new("cmd-c", CopySelection, Some(TERMINAL)),
-        KeyBinding::new("cmd-v", Paste, Some(TERMINAL)),
+        own("alt-f12", ToggleTerminal, ws),
+        own("cmd-c", CopySelection, Some(TERMINAL)),
+        own("cmd-v", Paste, Some(TERMINAL)),
         // gpui-kit's root moves focus with tab and shift-tab; in the terminal they are the shell's.
-        KeyBinding::new("tab", SendTab, Some(TERMINAL)),
-        KeyBinding::new("shift-tab", SendBackTab, Some(TERMINAL)),
+        own("tab", SendTab, Some(TERMINAL)),
+        own("shift-tab", SendBackTab, Some(TERMINAL)),
         // More shells, as IntelliJ's terminal tabs: Cmd+T anywhere, the rest inside the terminal,
         // where they win over the editor's own Cmd+W and tab keys.
-        KeyBinding::new("cmd-t", NewTerminal, ws),
-        KeyBinding::new("cmd-w", CloseTerminal, Some(TERMINAL)),
-        KeyBinding::new("cmd-shift-[", PrevTerminal, Some(TERMINAL)),
-        KeyBinding::new("cmd-shift-]", NextTerminal, Some(TERMINAL)),
-    ]);
+        own("cmd-t", NewTerminal, ws),
+        own("cmd-w", CloseTerminal, Some(TERMINAL)),
+        own("cmd-shift-[", PrevTerminal, Some(TERMINAL)),
+        own("cmd-shift-]", NextTerminal, Some(TERMINAL)),
+    ]
+}
+
+/// subwy's own keys as the Settings tab's keymap lists them.
+pub fn defaults() -> Vec<Binding> {
+    own_keys()
+        .into_iter()
+        .map(|(key, action, context)| Binding {
+            key: key.to_string(),
+            action: action.name().to_string(),
+            context: context.map(str::to_string),
+        })
+        .collect()
+}
+
+/// gpui-kit's own keys (its editor's), as they stood before subwy bound its own, so the keymap
+/// can be built again from the start.
+struct KitKeys(Vec<KeyBinding>);
+
+impl Global for KitKeys {}
+
+/// Binds every key: gpui-kit's, subwy's own, then the user's from the settings, which win. Called
+/// once at start and again when the Settings tab changes the keymap.
+pub fn bind_all(cx: &mut App) -> Option<String> {
+    let kit = match cx.try_global::<KitKeys>() {
+        Some(kit) => kit.0.clone(),
+        None => {
+            let kit: Vec<KeyBinding> = cx.key_bindings().borrow().bindings().cloned().collect();
+            cx.set_global(KitKeys(kit.clone()));
+            kit
+        }
+    };
+    cx.clear_key_bindings();
+    cx.bind_keys(kit);
+    init(cx);
+    let overrides = crate::settings(cx).keymap.clone();
+    bind_overrides(&overrides, cx)
+}
+
+fn init(cx: &mut App) {
+    let bindings: Vec<KeyBinding> = own_keys()
+        .into_iter()
+        .map(|(key, action, context)| {
+            let context = context.map(|source| {
+                std::rc::Rc::new(
+                    KeyBindingContextPredicate::parse(source).expect("subwy's own key context"),
+                )
+            });
+            KeyBinding::load(key, action, context, false, None, &DummyKeyboardMapper)
+                .expect("subwy's own key")
+        })
+        .collect();
+    cx.bind_keys(bindings);
 }
