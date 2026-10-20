@@ -351,6 +351,10 @@ fn clipboard(check: &mut Check) {
     );
     // Copy README.md into docs.
     check.keys(window, "home down cmd-v");
+    check.wait_until(|check| {
+        check.workspace(window, |w, cx| w.tree_selection(cx))
+            == Some(PathBuf::from("docs/README.md"))
+    });
     check.expect_eq(
         "cmd-v on a folder copies into it",
         fixture.path().join("docs/README.md").is_file(),
@@ -482,8 +486,9 @@ fn drag_and_drop(check: &mut Check) {
     );
     // And on the terminal its path is typed.
     drag(check, window, (100., row_y(3)), (700., 650.), none, None);
+    // The long temporary path wraps, so the screen is read as one string.
     let typed = crate::terminal::wait_for(check, window, |lines| {
-        lines.iter().any(|line| line.contains("docs/notes.md"))
+        lines.concat().contains("docs/notes.md")
     });
     check.expect_eq("a row dropped on the terminal types its path", typed, true);
     check.shot(window, "tree-15-dropped");

@@ -141,6 +141,22 @@ impl Check {
         }
     }
 
+    /// Waits up to two seconds for `done`: file operations and reads run off the main thread and
+    /// land a moment after the keys that start them.
+    pub fn wait_until(&mut self, mut done: impl FnMut(&mut Self) -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            self.cx.run_until_parked();
+            if done(self) {
+                return true;
+            }
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     pub fn clipboard(&self) -> Option<String> {
         self.cx.read_from_clipboard().and_then(|item| item.text())
     }
