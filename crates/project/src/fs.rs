@@ -467,6 +467,31 @@ pub fn rename(root: &Path, from: &Path, new_name: &str) -> Result<PathBuf, NameE
     Ok(to)
 }
 
+/// What F5 / F6's command line says, as the tree names paths: the folder to go into and, for a
+/// single item, a new name. A trailing slash, or several items, name a folder only.
+pub fn typed_target(typed: &str, several: bool) -> Result<(PathBuf, Option<String>), NameError> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if typed.starts_with('/') {
+        return Err(NameError::Invalid);
+    }
+    let (folder, name) = match typed.strip_suffix('/') {
+        Some(folder) => (folder, None),
+        None if several => (typed, None),
+        None => match typed.rsplit_once('/') {
+            Some((folder, name)) => (folder, Some(name)),
+            None => ("", Some(typed)),
+        },
+    };
+    let parts: Vec<&str> = folder.split('/').filter(|_| !folder.is_empty()).collect();
+    if !parts.iter().all(|part| valid_name(part)) || name.is_some_and(|name| !valid_name(name)) {
+        return Err(NameError::Invalid);
+    }
+    Ok((parts.iter().collect(), name.map(str::to_string)))
+}
+
 /// The name a copy of `name` takes in the folder `dir` without replacing anything: the name itself
 /// when it is free, else Finder's `notes copy.md`, `notes copy 2.md`. A folder's name, or a name
 /// with nothing before its dot (`.env`), has no extension to keep.
@@ -1252,5 +1277,35 @@ mod tests {
             Err(NameError::IntoItself)
         ));
         assert_eq!(dir_names(&guide), ["a.md"]);
+    }
+
+    #[test]
+    fn a_typed_target_is_a_folder_and_maybe_a_name() {
+        let target = |typed, several| {
+            typed_target(typed, several)
+                .map(|(dir, name)| (dir.to_string_lossy().into_owned(), name))
+        };
+        assert_eq!(
+            target("docs/guide/a.md", false).unwrap(),
+            ("docs/guide".into(), Some("a.md".into()))
+        );
+        assert_eq!(
+            target("a.md", false).unwrap(),
+            ("".into(), Some("a.md".into()))
+        );
+        assert_eq!(target("docs/", false).unwrap(), ("docs".into(), None));
+        // Several items keep their names; what is typed is their folder.
+        assert_eq!(
+            target("docs/guide", true).unwrap(),
+            ("docs/guide".into(), None)
+        );
+        assert_eq!(target(" src/ ", true).unwrap(), ("src".into(), None));
+        assert!(matches!(target("", false), Err(NameError::Empty)));
+        for bad in ["/etc/a.md", "../a.md", "docs//a.md", "docs/.."] {
+            assert!(
+                matches!(target(bad, false), Err(NameError::Invalid)),
+                "{bad}"
+            );
+        }
     }
 }

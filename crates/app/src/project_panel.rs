@@ -21,16 +21,17 @@ use subwy_project::{
     folders::Folders,
     fs::{self, EntryKind, NameError},
     nav::{self, NavKey, SearchStep},
+    paths,
     tree::{self, ProjectTree, Row},
 };
 
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CutItems, Expand,
-        ExtendNext, ExtendPrev, FocusEditor, NewFile, Open, PROJECT_PANEL, PageDown, PageUp,
-        PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext,
-        SelectPrev, SpeedSearch, Trash,
+        Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CopyTo, CutItems, Expand,
+        ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open, PROJECT_PANEL, PageDown,
+        PageUp, PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast,
+        SelectNext, SelectPrev, SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -159,6 +160,8 @@ enum Entry {
     CopyRelativePath,
     CopyFileName,
     Rename,
+    CopyTo,
+    MoveTo,
     Trash,
     RevealInFinder,
     RemoveFromWindow,
@@ -176,6 +179,8 @@ impl Entry {
             Entry::CopyRelativePath => "Copy Relative Path",
             Entry::CopyFileName => "Copy File Name",
             Entry::Rename => "Rename…",
+            Entry::CopyTo => "Copy To…",
+            Entry::MoveTo => "Move To…",
             Entry::Trash => "Move to Trash",
             Entry::RevealInFinder => "Reveal in Finder",
             Entry::RemoveFromWindow => "Remove from Window",
@@ -191,6 +196,8 @@ impl Entry {
             Entry::CopyPath => Some("⌘⇧C"),
             Entry::CopyRelativePath => Some("⌥⌘⇧C"),
             Entry::Rename => Some("⇧F6"),
+            Entry::CopyTo => Some("F5"),
+            Entry::MoveTo => Some("F6"),
             Entry::Trash => Some("⌘⌫"),
             Entry::RevealInFinder => Some("⌥⌘R"),
             _ => None,
@@ -224,9 +231,11 @@ fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
             Entry::CopyFileName,
         ],
     ];
-    if !own_folder {
-        groups.push(vec![Entry::Rename, Entry::Trash]);
-    }
+    groups.push(if own_folder {
+        vec![Entry::CopyTo]
+    } else {
+        vec![Entry::Rename, Entry::CopyTo, Entry::MoveTo, Entry::Trash]
+    });
     groups.push(vec![Entry::RevealInFinder]);
     if own_folder && several {
         groups.push(vec![Entry::RemoveFromWindow]);
@@ -288,6 +297,8 @@ enum EditTarget {
     New { dir: PathBuf, kind: EntryKind },
     /// A new name for the item at `path`.
     Rename { path: PathBuf },
+    /// F5 / F6: where `sources` are copied or, with `cut`, moved.
+    Transfer { sources: Vec<PathBuf>, cut: bool },
 }
 
 impl EditTarget {
@@ -295,6 +306,8 @@ impl EditTarget {
         match self {
             EditTarget::New { .. } => &[("↩", "Create"), ("Esc", "Cancel")],
             EditTarget::Rename { .. } => &[("↩", "Rename"), ("Esc", "Cancel")],
+            EditTarget::Transfer { cut: false, .. } => &[("↩", "Copy"), ("Esc", "Cancel")],
+            EditTarget::Transfer { cut: true, .. } => &[("↩", "Move"), ("Esc", "Cancel")],
         }
     }
 }
@@ -720,21 +733,33 @@ impl ProjectPanel {
         cx.spawn_in(window, async move |this, cx| {
             let results = work.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.pasted(dir, cut, results, window, cx)
+                let landed = this.arrived(cut, results, "pasted", window, cx);
+                // Moved once: the clipboard keeps the new paths as plain text, so a second Cmd+V
+                // does not try to move them again.
+                if cut && !landed.is_empty() {
+                    let text = landed
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
             });
         })
         .detach();
     }
 
-    /// Shows what a paste made, selected; moved items take their open tabs along.
-    fn pasted(
+    /// Shows items a paste, F5 or F6 put somewhere, selected; moved items take their open tabs
+    /// along. Reports the ones that could not be `verb` (pasted, copied, moved). Returns where the
+    /// others landed, on disk.
+    fn arrived(
         &mut self,
-        dir: PathBuf,
         cut: bool,
         results: Vec<(PathBuf, Result<PathBuf, NameError>)>,
+        verb: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Vec<PathBuf> {
         let mut landed = Vec::new();
         let mut failed = Vec::new();
         for (from, result) in results {
@@ -751,31 +776,30 @@ impl ProjectPanel {
                 Err(err) => failed.push((from, err)),
             }
         }
-        self.load_dir(dir, cx);
         let rels: Vec<PathBuf> = landed
             .iter()
             .filter_map(|abs| self.folders.relative(abs))
             .collect();
+        // Every read folder on the way may have changed: the item, and any folder made for it.
+        let changed: std::collections::BTreeSet<PathBuf> = rels
+            .iter()
+            .flat_map(|rel| rel.ancestors().skip(1))
+            .filter(|dir| self.tree.listing(dir).is_some())
+            .map(Path::to_path_buf)
+            .collect();
+        for dir in changed {
+            self.load_dir(dir, cx);
+        }
         if let Some((first, rest)) = rels.split_first() {
             self.reveal(first, cx);
             for rel in rest {
                 self.tree.toggle(rel.clone());
             }
         }
-        // Moved once: the clipboard keeps the new paths as plain text, so a second Cmd+V does
-        // not try to move them again.
-        if cut && !landed.is_empty() {
-            let text = landed
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("\n");
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
         let title = match failed.as_slice() {
-            [] => return,
-            [(from, _)] => format!("“{}” could not be pasted", file_name(from)),
-            many => format!("{} items could not be pasted", many.len()),
+            [] => return landed,
+            [(from, _)] => format!("“{}” could not be {verb}", file_name(from)),
+            many => format!("{} items could not be {verb}", many.len()),
         };
         drop(window.prompt(
             PromptLevel::Critical,
@@ -784,6 +808,7 @@ impl ProjectPanel {
             &["OK"],
             cx,
         ));
+        landed
     }
 
     /// Right-click on a row: selects it and shows what can be done to it.
@@ -833,6 +858,8 @@ impl ProjectPanel {
             Entry::CopyRelativePath => window.dispatch_action(Box::new(CopyRelativePath), cx),
             Entry::CopyFileName => window.dispatch_action(Box::new(CopyFileName), cx),
             Entry::Rename => self.rename(window, cx),
+            Entry::CopyTo => self.transfer(false, window, cx),
+            Entry::MoveTo => self.transfer(true, window, cx),
             Entry::Trash => self.trash(window, cx),
             Entry::RevealInFinder => window.dispatch_action(Box::new(RevealInFinder), cx),
             Entry::RemoveFromWindow => cx.emit(PanelEvent::RemoveFolder(path)),
@@ -1076,6 +1103,57 @@ impl ProjectPanel {
         self.reveal_selection();
     }
 
+    /// F5 and F6 (IntelliJ's Copy and Move): the command line takes where the selection goes, as
+    /// the tree names paths. One item shows its own path, its name selected to copy or its folder
+    /// to move; several show their folder.
+    fn transfer(&mut self, cut: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() {
+            return;
+        }
+        // Never the window's own folder; a folder of several is copied but does not move.
+        let sources: Vec<PathBuf> = tree::outermost(&self.selection())
+            .into_iter()
+            .filter(|p| !p.as_os_str().is_empty() && self.folders.mount(p).is_some())
+            .filter(|p| !(cut && self.folders.is_folder(p)))
+            .collect();
+        let Some(first) = sources.first() else {
+            return;
+        };
+        self.search = None;
+        let folder = match first.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                format!("{}/", paths::relative(parent))
+            }
+            _ => String::new(),
+        };
+        let (text, select) = match sources.as_slice() {
+            [one] => {
+                let name = file_name(one);
+                let kind = self
+                    .tree
+                    .rows()
+                    .iter()
+                    .find(|row| row.path == *one)
+                    .map_or(EntryKind::File, |row| row.kind);
+                let select = if cut {
+                    0..folder.len()
+                } else {
+                    let stem = name_selection(&name, kind);
+                    folder.len() + stem.start..folder.len() + stem.end
+                };
+                (format!("{folder}{name}"), select)
+            }
+            _ => (folder.clone(), 0..folder.len()),
+        };
+        self.start_edit(
+            EditTarget::Transfer { sources, cut },
+            &text,
+            select,
+            window,
+            cx,
+        );
+    }
+
     /// Cmd+Backspace: asks, then moves the selection to the Trash off the main thread.
     fn trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.edit.is_some() {
@@ -1214,6 +1292,10 @@ impl ProjectPanel {
         let target = match &edit.target {
             EditTarget::New { dir, .. } => dir,
             EditTarget::Rename { path } => path,
+            EditTarget::Transfer { sources, cut } => {
+                let (sources, cut) = (sources.clone(), *cut);
+                return self.commit_transfer(sources, cut, &typed, window, cx);
+            }
         };
         let Some((root, rest, prefix)) = self.folders.mount(target) else {
             return;
@@ -1236,6 +1318,7 @@ impl ProjectPanel {
                 })
                 .detach();
             }
+            EditTarget::Transfer { .. } => {}
             EditTarget::Rename { path } => {
                 let work = cx.background_executor().spawn(async move {
                     fs::rename(&root, &rest, &typed).map(|renamed| prefix.join(renamed))
@@ -1249,6 +1332,78 @@ impl ProjectPanel {
                 .detach();
             }
         }
+    }
+
+    /// Enter on F5 / F6's command line: copies or moves off the main thread. The folder is made
+    /// when it is not there. A single item typed onto a folder goes inside it, as `mv` does.
+    fn commit_transfer(
+        &mut self,
+        sources: Vec<PathBuf>,
+        cut: bool,
+        typed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = fs::typed_target(typed, sources.len() > 1).and_then(|(dir, name)| {
+            // With several folders, the first part of a path names one of them.
+            let dir = self.folders.absolute(&dir).ok_or(NameError::Invalid)?;
+            Ok((dir, name))
+        });
+        let (dir, name) = match target {
+            Ok(target) => target,
+            Err(err) => return self.refused(err, cx),
+        };
+        let sources: Vec<PathBuf> = sources
+            .iter()
+            .filter_map(|path| self.folders.absolute(path))
+            .collect();
+        let work = cx.background_executor().spawn(async move {
+            std::fs::create_dir_all(&dir)?;
+            Ok::<_, NameError>(
+                sources
+                    .into_iter()
+                    .map(|from| {
+                        let own = from
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let (into, name) = match &name {
+                            Some(name) if dir.join(name) != from && dir.join(name).is_dir() => {
+                                (dir.join(name), own)
+                            }
+                            Some(name) => (dir.clone(), name.clone()),
+                            None => (dir.clone(), own),
+                        };
+                        let result = if cut {
+                            fs::move_into(&from, &into, &name)
+                        } else {
+                            fs::copy_into(&from, &into, &name)
+                        };
+                        (from, result)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let outcome = work.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Nothing went: the command line stays with the reason, to try another path.
+                let results = match outcome {
+                    Err(err) => return this.refused(err, cx),
+                    Ok(results) if results.iter().all(|(_, result)| result.is_err()) => {
+                        if let Some(err) = results.into_iter().find_map(|(_, r)| r.err()) {
+                            this.refused(err, cx);
+                        }
+                        return;
+                    }
+                    Ok(results) => results,
+                };
+                this.end_edit(window, cx);
+                let verb = if cut { "moved" } else { "copied" };
+                this.arrived(cut, results, verb, window, cx);
+            });
+        })
+        .detach();
     }
 
     fn renamed(
@@ -1316,7 +1471,7 @@ impl ProjectPanel {
     fn items(&self, rows: Vec<Row>) -> Vec<Item> {
         let new = self.edit.as_ref().and_then(|edit| match &edit.target {
             EditTarget::New { dir, kind } => Some((dir, *kind, &edit.typed)),
-            EditTarget::Rename { .. } => None,
+            EditTarget::Rename { .. } | EditTarget::Transfer { .. } => None,
         });
         let Some((dir, kind, typed)) = new else {
             return rows.into_iter().map(Item::Row).collect();
@@ -1999,9 +2154,15 @@ fn edit_field(edit: &EditView, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Cmd+N's name line, in place of the key hints: what is made, in which folder, the name, and why
-/// the last Enter was refused.
-fn command_line(edit: &EditView, kind: EntryKind, place: &str, cx: &App) -> impl IntoElement {
+/// The command line in place of the key hints, for Cmd+N, F5 and F6: what is done (`badge`), in
+/// which folder (`place`, when the input holds a name alone), the input, and why the last Enter
+/// was refused.
+fn command_line(
+    edit: &EditView,
+    badge: SharedString,
+    place: Option<String>,
+    cx: &App,
+) -> impl IntoElement {
     let p = theme::colors(cx);
     div()
         .h(z(size::KEY_HINTS, cx))
@@ -2030,18 +2191,14 @@ fn command_line(edit: &EditView, kind: EntryKind, place: &str, cx: &App) -> impl
                 .text_size(z(10.5, cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(c(p.sub))
-                .child(if kind == EntryKind::Dir {
-                    "NEW FOLDER"
-                } else {
-                    "NEW FILE"
-                }),
+                .child(badge),
         )
-        .child(
+        .children(place.map(|place| {
             div()
                 .flex_none()
                 .text_color(c(p.ignored))
-                .child(format!("{place}/")),
-        )
+                .child(format!("{place}/"))
+        }))
         .child(
             div()
                 .flex_1()
@@ -2210,14 +2367,32 @@ impl Render for ProjectPanel {
                 } else {
                     dir.display().to_string()
                 };
+                let badge = if *kind == EntryKind::Dir {
+                    "NEW FOLDER"
+                } else {
+                    "NEW FILE"
+                };
+                Some((badge.into(), Some(place)))
+            }
+            EditTarget::Transfer { sources, cut } => {
+                let verb = if *cut { "MOVE" } else { "COPY" };
+                let badge: SharedString = match sources.len() {
+                    1 => verb.into(),
+                    n => format!("{verb} {n}").into(),
+                };
+                Some((badge, None))
+            }
+            EditTarget::Rename { .. } => None,
+        });
+        let command = command
+            .zip(self.edit.as_ref())
+            .map(|((badge, place), edit)| {
                 let view = EditView {
                     input: edit.input.clone(),
                     error: edit.error.clone(),
                 };
-                Some((view, *kind, place))
-            }
-            EditTarget::Rename { .. } => None,
-        });
+                (view, badge, place)
+            });
         div()
             .key_context(PROJECT_PANEL)
             .track_focus(&self.focus_handle)
@@ -2293,6 +2468,8 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &CutItems, _, cx| this.put_on_clipboard(true, cx)))
             .on_action(cx.listener(|this, _: &CopyItems, _, cx| this.put_on_clipboard(false, cx)))
             .on_action(cx.listener(|this, _: &PasteItems, window, cx| this.paste(window, cx)))
+            .on_action(cx.listener(|this, _: &CopyTo, window, cx| this.transfer(false, window, cx)))
+            .on_action(cx.listener(|this, _: &MoveTo, window, cx| this.transfer(true, window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     // The pointer holds the middle of the gap, half a gap past the tree's edge.
@@ -2480,7 +2657,7 @@ impl Render for ProjectPanel {
             )
             // Naming a new item takes the hint line for its command line, even with hints hidden.
             .map(|el| match command {
-                Some((edit, kind, place)) => el.child(command_line(&edit, kind, &place, cx)),
+                Some((edit, badge, place)) => el.child(command_line(&edit, badge, place, cx)),
                 None => el.when(self.show_key_hints, |el| el.child(key_hints(hints, cx))),
             })
             .child(crate::workspace::island_corners(cx))

@@ -20,6 +20,7 @@ pub fn run(check: &mut Check) {
     context_menu(check);
     several(check);
     clipboard(check);
+    copy_move(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -255,9 +256,9 @@ fn context_menu(check: &mut Check) {
         copied,
         Some("docs".into()),
     );
-    // Rename… is up from the end, past Reveal in Finder and Move to Trash.
+    // Rename… is up from the end, past Reveal in Finder, Move to Trash, Move To and Copy To.
     right_click(check, window, 100., row_y(5));
-    check.keys(window, "up up up enter cmd-a i n d e x . m d enter");
+    check.keys(window, "up up up up up enter cmd-a i n d e x . m d enter");
     check.expect_eq(
         "the menu's rename renames on disk",
         fixture.path().join("index.md").is_file(),
@@ -367,6 +368,44 @@ fn clipboard(check: &mut Check) {
         active,
         Some(PathBuf::from("src/notes.md")),
     );
+}
+
+/// F5 and F6 take the target path on the command line: a new name, or a folder.
+fn copy_move(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // Rows: the folder, docs, src, target, .gitignore, README.md. F5 selects the name before its
+    // extension, so typing replaces it; Enter at once is refused, the name being taken.
+    check.keys(window, "end f5 enter");
+    check.shot(window, "tree-12-copy-taken");
+    check.keys(window, "d o c s / r e a d m e - c o p y enter");
+    check.expect_eq(
+        "f5 copies to the typed path",
+        std::fs::read_to_string(fixture.path().join("docs/readme-copy.md")).ok(),
+        Some("# leaf\n".into()),
+    );
+    check.expect_eq(
+        "the original stays",
+        fixture.path().join("README.md").is_file(),
+        true,
+    );
+    // F6 selects the folder part: typing a folder moves the file there under its name. The copy
+    // opened docs; close it and go to src/main.rs.
+    check.keys(window, "home down left down right down f6");
+    check.shot(window, "tree-13-move");
+    check.keys(window, "d o c s / enter");
+    let moved = (
+        fixture.path().join("src/main.rs").exists(),
+        fixture.path().join("docs/main.rs").is_file(),
+    );
+    check.expect_eq("f6 moves to the typed folder", moved, (false, true));
+    // Several items: the command line holds their folder.
+    check.keys(window, "end shift-up f6 s r c enter");
+    let moved = (
+        fixture.path().join("src/.gitignore").is_file(),
+        fixture.path().join("src/README.md").is_file(),
+    );
+    check.expect_eq("f6 moves several items into a folder", moved, (true, true));
 }
 
 fn click_with(
