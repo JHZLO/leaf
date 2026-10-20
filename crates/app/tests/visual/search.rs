@@ -148,6 +148,7 @@ pub fn run(check: &mut Check) {
     );
 
     long_list(check);
+    in_folder(check);
 
     // On light paper and zoomed: every size scales.
     let was = check.cx.update(|cx| Theme::global(cx).mode);
@@ -159,6 +160,23 @@ pub fn run(check: &mut Check) {
     check.shot(window, "search-light-zoomed");
     check.keys(window, "escape cmd-0");
     check.cx.update(|cx| Theme::change(was, None, cx));
+}
+
+/// Cmd+Shift+F on a folder in the tree searches that folder only (IntelliJ's Directory scope).
+fn in_folder(check: &mut Check) {
+    let fixture = fixture();
+    let window = check.open(Some(fixture.path()));
+    // Rows: the folder, docs. "leaf" is in docs/guide/paths.md, README.md and src/main.rs.
+    check.keys(window, "down down");
+    find(check, window, "leaf");
+    check.shot(window, "search-in-folder");
+    check.keys(window, "down down down enter");
+    expect_reference(
+        check,
+        window,
+        "a folder's search finds only what it holds",
+        "docs/guide/paths.md:3",
+    );
 }
 
 /// More matches than fit: the list scrolls to keep the selected line in view.

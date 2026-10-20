@@ -15,6 +15,7 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 use subwy_project::{
     folders::Folders,
     index::{self, FileIndex},
+    paths,
     search::{self, Results},
 };
 
@@ -60,6 +61,8 @@ enum Row {
 
 pub struct SearchPanel {
     folders: Folders,
+    /// The folder searched, as the tree names it, ending in `/`; the whole window when `None`.
+    scope: Option<String>,
     input: Entity<InputState>,
     /// Empty until the walk of the folder, started when the panel opens, comes back.
     index: Option<Arc<FileIndex>>,
@@ -91,8 +94,20 @@ impl Drop for SearchPanel {
 }
 
 impl SearchPanel {
-    pub fn new(folders: Folders, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in folder"));
+    /// Searches the window's folders, or only the folder `scope` (Cmd+Shift+F on a folder in the
+    /// tree, IntelliJ's Directory scope).
+    pub fn new(
+        folders: Folders,
+        scope: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let scope = scope.map(|dir| format!("{}/", paths::relative(&dir)));
+        let placeholder = match &scope {
+            Some(dir) => format!("Find in {}", dir.trim_end_matches('/')),
+            None => "Find in folder".to_string(),
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let subscriptions = vec![cx.subscribe_in(
             &input,
             window,
@@ -104,9 +119,16 @@ impl SearchPanel {
         )];
         let load = cx.spawn({
             let folders = folders.clone();
+            let scope = scope.clone();
             async move |this, cx| {
                 let index = cx
-                    .background_spawn(async move { index::build_folders(&folders) })
+                    .background_spawn(async move {
+                        let mut index = index::build_folders(&folders);
+                        if let Some(scope) = scope {
+                            index.paths.retain(|path| path.starts_with(&scope));
+                        }
+                        index
+                    })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.index = Some(Arc::new(index));
@@ -116,6 +138,7 @@ impl SearchPanel {
         });
         Self {
             folders,
+            scope,
             input,
             index: None,
             results: None,
@@ -375,10 +398,25 @@ impl Render for SearchPanel {
             .text_color(c(p.ink))
             .child(
                 div()
+                    .flex()
+                    .items_center()
                     .when(summary.is_some(), |el| {
                         el.border_b_1().border_color(c(p.line))
                     })
-                    .child(input),
+                    .child(div().flex_1().min_w_0().child(input))
+                    // The folder searched stays in sight once the query hides the placeholder.
+                    .children(self.scope.clone().map(|scope| {
+                        div()
+                            .flex_none()
+                            .max_w(z(WIDTH / 3., cx))
+                            .pr(z(PADDING_X, cx))
+                            .overflow_hidden()
+                            .text_ellipsis_start()
+                            .whitespace_nowrap()
+                            .text_size(z(SMALL_TEXT, cx))
+                            .text_color(c(p.sub))
+                            .child(format!("in {scope}"))
+                    })),
             )
             .when_some(summary, |el, summary| {
                 el.child(

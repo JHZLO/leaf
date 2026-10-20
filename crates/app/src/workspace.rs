@@ -1084,7 +1084,12 @@ impl Workspace {
         let Some(folders) = self.folders(cx) else {
             return;
         };
-        let view = cx.new(|cx| SearchPanel::new(folders, window, cx));
+        // From the tree, a selected folder is what is searched.
+        let scope = self
+            .tree_focused(window, cx)
+            .then(|| self.panel.as_ref()?.read(cx).selected_folder())
+            .flatten();
+        let view = cx.new(|cx| SearchPanel::new(folders, scope, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,

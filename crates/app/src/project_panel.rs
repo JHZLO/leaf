@@ -31,7 +31,7 @@ use crate::{
         Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CopyTo, CutItems, Expand,
         ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open, OpenInTerminal, PROJECT_PANEL,
         PageDown, PageUp, PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast,
-        SelectNext, SelectPrev, SpeedSearch, Trash,
+        SelectNext, SelectPrev, SpeedSearch, ToggleSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -161,6 +161,7 @@ enum Entry {
     CopyPath,
     CopyRelativePath,
     CopyFileName,
+    FindInFolder,
     Rename,
     CopyTo,
     MoveTo,
@@ -181,6 +182,7 @@ impl Entry {
             Entry::CopyPath => "Copy Path",
             Entry::CopyRelativePath => "Copy Relative Path",
             Entry::CopyFileName => "Copy File Name",
+            Entry::FindInFolder => "Find in Folder…",
             Entry::Rename => "Rename…",
             Entry::CopyTo => "Copy To…",
             Entry::MoveTo => "Move To…",
@@ -200,6 +202,7 @@ impl Entry {
             Entry::CopyPath => Some("⌘⇧C"),
             Entry::CopyRelativePath => Some("⌥⌘⇧C"),
             Entry::Rename => Some("⇧F6"),
+            Entry::FindInFolder => Some("⌘⇧F"),
             Entry::CopyTo => Some("F5"),
             Entry::MoveTo => Some("F6"),
             Entry::Trash => Some("⌘⌫"),
@@ -218,9 +221,10 @@ impl Entry {
     }
 }
 
-/// The right-click menu of an item, in groups. A folder of the window (`own_folder`) is not
-/// cut, renamed or trashed; with several folders it can leave the window instead.
-fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
+/// The right-click menu of an item, in groups. A folder (`folder`) can be searched. A folder of
+/// the window (`own_folder`) is not cut, renamed or trashed; with several folders it can leave the
+/// window instead.
+fn context_entries(folder: bool, own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
     let clipboard = if own_folder {
         vec![Entry::Copy, Entry::Paste]
     } else {
@@ -235,6 +239,9 @@ fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
             Entry::CopyFileName,
         ],
     ];
+    if folder {
+        groups.push(vec![Entry::FindInFolder]);
+    }
     groups.push(if own_folder {
         vec![Entry::CopyTo]
     } else {
@@ -458,6 +465,15 @@ impl ProjectPanel {
 
     pub fn selected(&self) -> Option<&Path> {
         self.tree.selected()
+    }
+
+    /// The selected folder, when the lead is a folder inside the window rather than the window's
+    /// own folder: what Cmd+Shift+F from the tree searches.
+    pub fn selected_folder(&self) -> Option<PathBuf> {
+        let lead = self.tree.selected()?;
+        let rows = self.tree.rows();
+        let row = rows.iter().find(|row| row.path == lead)?;
+        (row.kind == EntryKind::Dir && !lead.as_os_str().is_empty()).then(|| lead.to_path_buf())
     }
 
     /// Everything selected, top to bottom.
@@ -976,7 +992,12 @@ impl ProjectPanel {
             self.tree.select(Some(path.clone()));
         }
         let own_folder = path.as_os_str().is_empty() || self.folders.is_folder(&path);
-        let entries = context_entries(own_folder, self.folders.several());
+        let folder = self
+            .tree
+            .rows()
+            .iter()
+            .any(|row| row.path == path && row.kind == EntryKind::Dir);
+        let entries = context_entries(folder, own_folder, self.folders.several());
         self.menu = Some(Menu::Context {
             path,
             entries,
@@ -1007,6 +1028,7 @@ impl ProjectPanel {
             Entry::CopyPath => window.dispatch_action(Box::new(CopyPath), cx),
             Entry::CopyRelativePath => window.dispatch_action(Box::new(CopyRelativePath), cx),
             Entry::CopyFileName => window.dispatch_action(Box::new(CopyFileName), cx),
+            Entry::FindInFolder => window.dispatch_action(Box::new(ToggleSearch), cx),
             Entry::Rename => self.rename(window, cx),
             Entry::CopyTo => self.transfer(false, window, cx),
             Entry::MoveTo => self.transfer(true, window, cx),
@@ -3019,7 +3041,7 @@ mod tests {
     #[test]
     fn a_folder_of_the_window_is_not_renamed_or_trashed_from_its_menu() {
         let flat = |own, several| -> Vec<Entry> {
-            context_entries(own, several)
+            context_entries(own, own, several)
                 .into_iter()
                 .flatten()
                 .collect()
@@ -3034,6 +3056,13 @@ mod tests {
         // One of several folders leaves the window instead.
         assert!(flat(true, true).contains(&Entry::RemoveFromWindow));
         assert!(!flat(false, true).contains(&Entry::RemoveFromWindow));
+        // Only a folder is searched.
+        let file: Vec<Entry> = context_entries(false, false, false)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert!(!file.contains(&Entry::FindInFolder));
+        assert!(flat(true, false).contains(&Entry::FindInFolder));
     }
 
     #[test]
