@@ -26,6 +26,7 @@ pub fn run(check: &mut Check) {
     binary(check);
     expand_keys(check);
     ignored(check);
+    undo(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -262,9 +263,12 @@ fn context_menu(check: &mut Check) {
         copied,
         Some("docs".into()),
     );
-    // Rename… is up from the end, past Reveal in Finder, Move to Trash, Move To and Copy To.
+    // Rename… is up from the end, past Open in Default App, Open in Terminal, Reveal in Finder,
+    // Move to Trash, Move To and Copy To.
     right_click(check, window, 100., row_y(5));
-    check.keys(window, "up up up up up enter cmd-a i n d e x . m d enter");
+    check.keys(window, "up up up up up up up");
+    check.shot(window, "tree-9-context-menu-rename");
+    check.keys(window, "enter cmd-a i n d e x . m d enter");
     check.expect_eq(
         "the menu's rename renames on disk",
         fixture.path().join("index.md").is_file(),
@@ -629,6 +633,59 @@ fn ignored(check: &mut Check) {
         rows.contains(&PathBuf::from("target")),
         true,
     );
+}
+
+/// Cmd+Z in the tree takes back a rename and a move, newest first; open tabs follow back. (Taking
+/// back a copy moves it to the Trash, which the checks leave alone.)
+fn undo(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // Rows: the folder, docs, src, target, .gitignore, README.md. Open README.md, rename it,
+    // then move it into src.
+    check.keys(
+        window,
+        "end enter cmd-1 shift-f6 cmd-a i n d e x . m d enter",
+    );
+    settle(check);
+    check.keys(window, "f6 s r c / enter");
+    settle(check);
+    check.expect_eq(
+        "the rename and the move happened",
+        fixture.path().join("src/index.md").is_file(),
+        true,
+    );
+    check.keys(window, "cmd-z");
+    settle(check);
+    let back = (
+        fixture.path().join("index.md").is_file(),
+        fixture.path().join("src/index.md").exists(),
+    );
+    check.expect_eq("cmd-z takes back the move", back, (true, false));
+    check.keys(window, "cmd-z");
+    settle(check);
+    check.expect_eq(
+        "cmd-z again takes back the rename",
+        fixture.path().join("README.md").is_file(),
+        true,
+    );
+    let active = check.workspace(window, |w, cx| w.active_file(cx));
+    check.expect_eq(
+        "the open tab follows back",
+        active,
+        Some(PathBuf::from("README.md")),
+    );
+    let selected = selection(check, window);
+    check.expect_eq(
+        "the restored item is selected",
+        selected,
+        Some(PathBuf::from("README.md")),
+    );
+}
+
+/// Lets disk work off the main thread finish and its results show.
+fn settle(check: &mut Check) {
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    check.cx.run_until_parked();
 }
 
 fn click_with(

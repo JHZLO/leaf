@@ -60,6 +60,7 @@ actions!(
         OpenInTerminal,
         ExpandAll,
         CollapseAll,
+        UndoChange,
     ]
 );
 
@@ -184,6 +185,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-+", ExpandAll, panel),
         KeyBinding::new("cmd-shift--", CollapseAll, panel),
         KeyBinding::new("cmd-_", CollapseAll, panel),
+        // A name being typed has its own Cmd+Z: its input is deeper and wins.
+        KeyBinding::new("cmd-z", UndoChange, panel),
         // The recent folders on the empty window.
         KeyBinding::new("up", SelectPrev, Some("Workspace && empty")),
         KeyBinding::new("down", SelectNext, Some("Workspace && empty")),

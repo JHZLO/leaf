@@ -32,7 +32,7 @@ use crate::{
         CutItems, Expand, ExpandAll, ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open,
         OpenInTerminal, PROJECT_PANEL, PageDown, PageUp, PassThrough, PasteItems, Rename,
         RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev, SpeedSearch, ToggleSearch,
-        Trash,
+        Trash, UndoChange,
     },
     route,
     theme::{self, c, size, z},
@@ -261,6 +261,17 @@ fn context_entries(folder: bool, own_folder: bool, several: bool) -> Vec<Vec<Ent
     groups
 }
 
+/// A file change Cmd+Z can take back. Paths are on disk.
+enum Undo {
+    /// Items moved or renamed, as (from, to).
+    Moved(Vec<(PathBuf, PathBuf)>),
+    /// Items made by New, a copy or a paste.
+    Made(Vec<PathBuf>),
+}
+
+/// How many changes Cmd+Z remembers.
+const UNDO_MOST: usize = 50;
+
 /// What Expand All reads at most, so a huge folder does not flood the tree.
 const EXPAND_ALL_MOST: usize = 300;
 
@@ -296,6 +307,8 @@ pub struct ProjectPanel {
     hovered: Option<PathBuf>,
     /// Where a drag over the tree would drop, drawn as the hovered row is.
     drop_target: Option<PathBuf>,
+    /// File changes made here, newest last, for Cmd+Z.
+    undo: Vec<Undo>,
 }
 
 /// A name being typed into the tree, in an input on its own line.
@@ -440,6 +453,7 @@ impl ProjectPanel {
             route: route::Motion::default(),
             hovered: None,
             drop_target: None,
+            undo: Vec::new(),
         };
         panel.load_dir(PathBuf::new(), cx);
         panel
@@ -858,7 +872,9 @@ impl ProjectPanel {
         cx.spawn_in(window, async move |this, cx| {
             let results = work.await;
             this.update_in(cx, |this, window, cx| {
-                this.arrived(cut, results, verb, window, cx)
+                let landed = this.arrived(cut, results, verb, window, cx);
+                this.remember(changed(cut, &landed));
+                landed.into_iter().map(|(_, to)| to).collect()
             })
             .unwrap_or_default()
         })
@@ -923,9 +939,9 @@ impl ProjectPanel {
         self.put_into(sources, &dir, cut, verb, window, cx).detach();
     }
 
-    /// Shows items a paste, F5 or F6 put somewhere, selected; moved items take their open tabs
-    /// along. Reports the ones that could not be `verb` (pasted, copied, moved). Returns where the
-    /// others landed, on disk.
+    /// Shows items a paste, F5, F6 or Cmd+Z put somewhere, selected; moved items take their open
+    /// tabs along. Reports the ones that could not be `verb` (pasted, copied, moved). Returns the
+    /// others as (from, to) on disk.
     fn arrived(
         &mut self,
         cut: bool,
@@ -933,7 +949,7 @@ impl ProjectPanel {
         verb: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Vec<PathBuf> {
+    ) -> Vec<(PathBuf, PathBuf)> {
         let mut landed = Vec::new();
         let mut failed = Vec::new();
         for (from, result) in results {
@@ -945,14 +961,14 @@ impl ProjectPanel {
                         self.load_dir(from.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
                         cx.emit(FileEvent::Renamed { from, to });
                     }
-                    landed.push(to);
+                    landed.push((from, to));
                 }
                 Err(err) => failed.push((from, err)),
             }
         }
         let rels: Vec<PathBuf> = landed
             .iter()
-            .filter_map(|abs| self.folders.relative(abs))
+            .filter_map(|(_, abs)| self.folders.relative(abs))
             .collect();
         // Every read folder on the way may have changed: the item, and any folder made for it.
         let changed: std::collections::BTreeSet<PathBuf> = rels
@@ -1395,49 +1411,115 @@ impl ProjectPanel {
             if answer.await != Ok(0) {
                 return;
             }
-            let work = cx.background_executor().spawn(async move {
-                jobs.into_iter()
-                    .map(|(path, root, rest)| {
-                        let result = fs::trash(&root, &rest);
-                        (path, result)
-                    })
-                    .collect::<Vec<_>>()
-            });
-            let results = work.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                let mut failed = Vec::new();
-                for (path, result) in results {
-                    match result {
-                        Ok(()) => {
-                            this.tree.forget(&path);
-                            // Reading the folder again moves the selection to a neighbor.
-                            this.load_dir(
-                                path.parent().map(Path::to_path_buf).unwrap_or_default(),
-                                cx,
-                            );
-                            cx.emit(FileEvent::Trashed { path });
-                        }
-                        Err(err) => failed.push((path, err)),
-                    }
-                }
-                let title = match failed.as_slice() {
-                    [] => return,
-                    [(path, _)] => {
-                        format!("“{}” could not be moved to the Trash", file_name(path))
-                    }
-                    many => format!("{} items could not be moved to the Trash", many.len()),
-                };
-                // Only a report: there is no answer to wait for.
-                drop(window.prompt(
-                    PromptLevel::Critical,
-                    &title,
-                    Some(&failed[0].1.to_string()),
-                    &["OK"],
-                    cx,
-                ));
-            });
+            let results = cx.background_executor().spawn(trash_all(jobs)).await;
+            let _ = this.update_in(cx, |this, window, cx| this.trashed(results, window, cx));
         })
         .detach();
+    }
+
+    /// Items went to the Trash (`results` by tree path): the tree forgets them and their tabs
+    /// close. Reports the ones that did not go.
+    fn trashed(
+        &mut self,
+        results: Vec<(PathBuf, std::io::Result<()>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut failed = Vec::new();
+        for (path, result) in results {
+            match result {
+                Ok(()) => {
+                    self.tree.forget(&path);
+                    // Reading the folder again moves the selection to a neighbor.
+                    self.load_dir(path.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
+                    cx.emit(FileEvent::Trashed { path });
+                }
+                Err(err) => failed.push((path, err)),
+            }
+        }
+        let title = match failed.as_slice() {
+            [] => return,
+            [(path, _)] => format!("“{}” could not be moved to the Trash", file_name(path)),
+            many => format!("{} items could not be moved to the Trash", many.len()),
+        };
+        // Only a report: there is no answer to wait for.
+        drop(window.prompt(
+            PromptLevel::Critical,
+            &title,
+            Some(&failed[0].1.to_string()),
+            &["OK"],
+            cx,
+        ));
+    }
+
+    /// Cmd+Z in the tree: takes back the last rename, move, copy, paste or new item, newest first.
+    /// A moved item goes back where it was; a made one goes to the Trash. The Trash itself is not
+    /// taken back (Finder's Put Back does that).
+    fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.edit.is_some() || self.menu.is_some() {
+            return;
+        }
+        let Some(change) = self.undo.pop() else {
+            return;
+        };
+        self.search = None;
+        match change {
+            Undo::Moved(pairs) => {
+                let work = cx.background_executor().spawn(async move {
+                    pairs
+                        .into_iter()
+                        .rev()
+                        .map(|(from, to)| {
+                            let back = match (from.parent(), from.file_name()) {
+                                (Some(dir), Some(name)) => {
+                                    fs::move_into(&to, dir, &name.to_string_lossy())
+                                }
+                                _ => Err(NameError::Invalid),
+                            };
+                            (to, back)
+                        })
+                        .collect::<Vec<_>>()
+                });
+                cx.spawn_in(window, async move |this, cx| {
+                    let results = work.await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.arrived(true, results, "moved back", window, cx);
+                    });
+                })
+                .detach();
+            }
+            Undo::Made(paths) => {
+                let jobs: Vec<(PathBuf, PathBuf, PathBuf)> = paths
+                    .iter()
+                    .filter_map(|abs| {
+                        let rel = self.folders.relative(abs)?;
+                        let (root, rest, _) = self.folders.mount(&rel)?;
+                        Some((rel, root.to_path_buf(), rest))
+                    })
+                    .collect();
+                cx.spawn_in(window, async move |this, cx| {
+                    let results = cx.background_executor().spawn(trash_all(jobs)).await;
+                    let _ =
+                        this.update_in(cx, |this, window, cx| this.trashed(results, window, cx));
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// Keeps what a change did, for Cmd+Z: moves as (from, to) on disk, or the items it made.
+    fn remember(&mut self, change: Undo) {
+        let empty = match &change {
+            Undo::Moved(pairs) => pairs.is_empty(),
+            Undo::Made(paths) => paths.is_empty(),
+        };
+        if empty {
+            return;
+        }
+        if self.undo.len() == UNDO_MOST {
+            self.undo.remove(0);
+        }
+        self.undo.push(change);
     }
 
     /// Puts an input with `text` in the tree, `select` selected, and gives it focus.
@@ -1604,7 +1686,8 @@ impl ProjectPanel {
                 };
                 this.end_edit(window, cx);
                 let verb = if cut { "moved" } else { "copied" };
-                this.arrived(cut, results, verb, window, cx);
+                let landed = this.arrived(cut, results, verb, window, cx);
+                this.remember(changed(cut, &landed));
             });
         })
         .detach();
@@ -1623,6 +1706,11 @@ impl ProjectPanel {
         };
         self.end_edit(window, cx);
         if to != from {
+            if let (Some(was), Some(now)) =
+                (self.folders.absolute(&from), self.folders.absolute(&to))
+            {
+                self.remember(Undo::Moved(vec![(was, now)]));
+            }
             self.tree.renamed(&from, &to);
             self.load_dir(from.parent().map(Path::to_path_buf).unwrap_or_default(), cx);
             cx.emit(FileEvent::Renamed { from, to });
@@ -1642,6 +1730,9 @@ impl ProjectPanel {
             Err(err) => return self.refused(err, cx),
         };
         self.end_edit(window, cx);
+        if let Some(abs) = self.folders.absolute(&path) {
+            self.remember(Undo::Made(vec![abs]));
+        }
         // The folder it went into changed; `reveal` reads the folders made on the way.
         self.load_dir(dir, cx);
         self.reveal(&path, cx);
@@ -2092,6 +2183,33 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// What a copy (`cut` false) or a move put on disk, as Cmd+Z takes it back. A move to where the
+/// item already was changed nothing.
+fn changed(cut: bool, landed: &[(PathBuf, PathBuf)]) -> Undo {
+    if cut {
+        Undo::Moved(
+            landed
+                .iter()
+                .filter(|(from, to)| from != to)
+                .cloned()
+                .collect(),
+        )
+    } else {
+        Undo::Made(landed.iter().map(|(_, to)| to.clone()).collect())
+    }
+}
+
+/// Moves items to the Trash, given as (tree path, folder on disk, path inside it), one after
+/// another; run off the main thread.
+async fn trash_all(jobs: Vec<(PathBuf, PathBuf, PathBuf)>) -> Vec<(PathBuf, std::io::Result<()>)> {
+    jobs.into_iter()
+        .map(|(path, root, rest)| {
+            let result = fs::trash(&root, &rest);
+            (path, result)
+        })
+        .collect()
 }
 
 /// A folder's listing. With several folders the window's node lists them.
@@ -2701,6 +2819,7 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &OpenInTerminal, _, cx| this.open_in_terminal(cx)))
             .on_action(cx.listener(|this, _: &ExpandAll, _, cx| this.expand_all(cx)))
             .on_action(cx.listener(|this, _: &CollapseAll, _, cx| this.collapse_all(cx)))
+            .on_action(cx.listener(|this, _: &UndoChange, window, cx| this.undo(window, cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     // The pointer holds the middle of the gap, half a gap past the tree's edge.
