@@ -14,10 +14,10 @@ use crate::{
     empty_state,
     finder::{self, Finder, FinderEvent},
     keymap::{
-        CloseTab, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewTerminal, NewWindow,
-        NextTab, Open, OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev,
-        ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut,
-        ZoomReset,
+        CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewTerminal,
+        NewWindow, NextTab, Open, OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext,
+        SelectPrev, ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn,
+        ZoomOut, ZoomReset,
     },
     project_panel::{FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
@@ -1155,6 +1155,19 @@ impl Workspace {
         }
     }
 
+    /// IntelliJ's Copy File Name: the name alone. On disk, so a folder's own row gives its name.
+    fn copy_file_name(&mut self, _: &CopyFileName, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(name) = self
+            .folders(cx)
+            .zip(self.copy_source(window, cx))
+            .and_then(|(folders, (rel, _))| folders.absolute(&rel))
+            .and_then(|path| path.file_name().map(paths::display_name))
+        else {
+            return;
+        };
+        self.copy(name, "Copied file name", cx);
+    }
+
     /// Shows the tree selection, or the active file, in a Finder window.
     fn reveal_in_finder(
         &mut self,
@@ -1318,6 +1331,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::new_terminal))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
+            .on_action(cx.listener(Self::copy_file_name))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::reveal_in_finder))
             .when(self.panel.is_none(), |el| {

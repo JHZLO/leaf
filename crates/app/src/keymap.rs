@@ -14,6 +14,7 @@ actions!(
         FocusTree,
         CopyPath,
         CopyRelativePath,
+        CopyFileName,
         Save,
         CloseTab,
         PrevTab,

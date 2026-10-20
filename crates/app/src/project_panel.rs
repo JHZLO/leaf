@@ -27,9 +27,9 @@ use subwy_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyPath, CopyRelativePath, Expand, FocusEditor, NewFile, Open, PROJECT_PANEL,
-        PageDown, PageUp, PassThrough, Rename, RevealInFinder, SelectFirst, SelectLast, SelectNext,
-        SelectPrev, SpeedSearch, Trash,
+        Collapse, CopyFileName, CopyPath, CopyRelativePath, Expand, FocusEditor, NewFile, Open,
+        PROJECT_PANEL, PageDown, PageUp, PassThrough, Rename, RevealInFinder, SelectFirst,
+        SelectLast, SelectNext, SelectPrev, SpeedSearch, Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -128,6 +128,7 @@ enum Entry {
     NewDirectory,
     CopyPath,
     CopyRelativePath,
+    CopyFileName,
     Rename,
     Trash,
     RevealInFinder,
@@ -141,6 +142,7 @@ impl Entry {
             Entry::NewDirectory => "New Directory",
             Entry::CopyPath => "Copy Path",
             Entry::CopyRelativePath => "Copy Relative Path",
+            Entry::CopyFileName => "Copy File Name",
             Entry::Rename => "Rename…",
             Entry::Trash => "Move to Trash",
             Entry::RevealInFinder => "Reveal in Finder",
@@ -175,7 +177,11 @@ impl Entry {
 fn context_entries(own_folder: bool, several: bool) -> Vec<Vec<Entry>> {
     let mut groups = vec![
         vec![Entry::NewFile, Entry::NewDirectory],
-        vec![Entry::CopyPath, Entry::CopyRelativePath],
+        vec![
+            Entry::CopyPath,
+            Entry::CopyRelativePath,
+            Entry::CopyFileName,
+        ],
     ];
     if !own_folder {
         groups.push(vec![Entry::Rename, Entry::Trash]);
@@ -609,6 +615,7 @@ impl ProjectPanel {
             }
             Entry::CopyPath => window.dispatch_action(Box::new(CopyPath), cx),
             Entry::CopyRelativePath => window.dispatch_action(Box::new(CopyRelativePath), cx),
+            Entry::CopyFileName => window.dispatch_action(Box::new(CopyFileName), cx),
             Entry::Rename => self.rename(window, cx),
             Entry::Trash => self.trash(window, cx),
             Entry::RevealInFinder => window.dispatch_action(Box::new(RevealInFinder), cx),

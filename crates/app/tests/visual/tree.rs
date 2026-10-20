@@ -244,11 +244,20 @@ fn context_menu(check: &mut Check) {
         copied,
         Some("README.md".into()),
     );
-    // Rename… is the fifth line.
+    // Copy File Name is the fifth line; on a folder's row it copies the folder's name.
+    right_click(check, window, 100., row_y(1));
+    check.keys(window, "down down down down down enter");
+    let copied = check.clipboard();
+    check.expect_eq(
+        "the menu's copy file name copies the name alone",
+        copied,
+        Some("docs".into()),
+    );
+    // Rename… is the sixth line.
     right_click(check, window, 100., row_y(5));
     check.keys(
         window,
-        "down down down down down enter cmd-a i n d e x . m d enter",
+        "down down down down down down enter cmd-a i n d e x . m d enter",
     );
     check.expect_eq(
         "the menu's rename renames on disk",
