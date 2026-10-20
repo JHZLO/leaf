@@ -28,10 +28,11 @@ use subwy_project::{
 use crate::{
     icons,
     keymap::{
-        Collapse, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CopyTo, CutItems, Expand,
-        ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open, OpenInTerminal, PROJECT_PANEL,
-        PageDown, PageUp, PassThrough, PasteItems, Rename, RevealInFinder, SelectFirst, SelectLast,
-        SelectNext, SelectPrev, SpeedSearch, ToggleSearch, Trash,
+        Collapse, CollapseAll, CopyFileName, CopyItems, CopyPath, CopyRelativePath, CopyTo,
+        CutItems, Expand, ExpandAll, ExtendNext, ExtendPrev, FocusEditor, MoveTo, NewFile, Open,
+        OpenInTerminal, PROJECT_PANEL, PageDown, PageUp, PassThrough, PasteItems, Rename,
+        RevealInFinder, SelectFirst, SelectLast, SelectNext, SelectPrev, SpeedSearch, ToggleSearch,
+        Trash,
     },
     route,
     theme::{self, c, size, z},
@@ -1103,6 +1104,13 @@ impl ProjectPanel {
         .detach();
     }
 
+    /// Collapse All (the header's button, Cmd+Shift+-): every folder but the top closes.
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        self.tree.collapse_all();
+        self.reveal_selection();
+        cx.notify();
+    }
+
     /// IntelliJ's tool window header: the title, then New, Select Opened File, Expand All,
     /// Collapse All, more options and Hide.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1164,13 +1172,7 @@ impl ProjectPanel {
                             "Collapse All",
                             cx,
                         )
-                        .on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.tree.collapse_all();
-                                this.reveal_selection();
-                                cx.notify();
-                            },
-                        )),
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.collapse_all(cx))),
                     )
                     .child(
                         div()
@@ -2679,6 +2681,8 @@ impl Render for ProjectPanel {
             .on_action(cx.listener(|this, _: &CopyTo, window, cx| this.transfer(false, window, cx)))
             .on_action(cx.listener(|this, _: &MoveTo, window, cx| this.transfer(true, window, cx)))
             .on_action(cx.listener(|this, _: &OpenInTerminal, _, cx| this.open_in_terminal(cx)))
+            .on_action(cx.listener(|this, _: &ExpandAll, _, cx| this.expand_all(cx)))
+            .on_action(cx.listener(|this, _: &CollapseAll, _, cx| this.collapse_all(cx)))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     // The pointer holds the middle of the gap, half a gap past the tree's edge.

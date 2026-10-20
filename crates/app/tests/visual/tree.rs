@@ -24,6 +24,7 @@ pub fn run(check: &mut Check) {
     drag_and_drop(check);
     open_in_terminal(check);
     binary(check);
+    expand_keys(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -585,6 +586,20 @@ fn binary(check: &mut Check) {
     );
     let open = check.workspace(window, |w, cx| w.open_files(cx));
     check.expect_eq("no tab opens for it", open, Vec::<PathBuf>::new());
+}
+
+/// Cmd+Shift+= and Cmd+Shift+- do what the header's Expand All and Collapse All do.
+fn expand_keys(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    check.keys(window, "down cmd-shift-=");
+    let expanded = wait_expanded(check, window, |dirs| {
+        dirs.iter().any(|d| d.ends_with("guide"))
+    });
+    check.expect_eq("cmd-shift-= expands all", expanded, true);
+    check.keys(window, "cmd-shift--");
+    let collapsed = check.workspace(window, |w, cx| w.tree_expanded(cx));
+    check.expect_eq("cmd-shift-- collapses all", collapsed, Some(Vec::new()));
 }
 
 fn click_with(

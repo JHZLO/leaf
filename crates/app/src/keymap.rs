@@ -58,6 +58,8 @@ actions!(
         CopyTo,
         MoveTo,
         OpenInTerminal,
+        ExpandAll,
+        CollapseAll,
     ]
 );
 
@@ -176,6 +178,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-v", PasteItems, panel),
         KeyBinding::new("f5", CopyTo, panel),
         KeyBinding::new("f6", MoveTo, panel),
+        // IntelliJ's Expand All and Collapse All. Cmd+Shift+= also reads as Cmd++, which zooms in
+        // elsewhere; in the tree it expands, and Cmd+= still zooms.
+        KeyBinding::new("cmd-shift-=", ExpandAll, panel),
+        KeyBinding::new("cmd-+", ExpandAll, panel),
+        KeyBinding::new("cmd-shift--", CollapseAll, panel),
+        KeyBinding::new("cmd-_", CollapseAll, panel),
         // The recent folders on the empty window.
         KeyBinding::new("up", SelectPrev, Some("Workspace && empty")),
         KeyBinding::new("down", SelectNext, Some("Workspace && empty")),
