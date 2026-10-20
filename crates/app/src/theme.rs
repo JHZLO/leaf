@@ -1,8 +1,11 @@
 //! subwy's paper palette and sizes. The single source of every color: subwy's own views read
 //! `colors(cx)`, and the gpui-kit theme (editor, scrollbars, menus) is generated from the same values.
 
-use gpui_kit::component::{ActiveTheme as _, Theme, ThemeRegistry, highlighter::LanguageRegistry};
+use gpui_kit::component::{
+    ActiveTheme as _, Theme, ThemeMode, ThemeRegistry, highlighter::LanguageRegistry,
+};
 use gpui_kit::*;
+use subwy_project::settings::Appearance;
 
 pub struct Palette {
     pub paper: u32,
@@ -301,17 +304,27 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
 /// Registers the subwy light and dark themes and follows the system appearance.
 pub fn init(cx: &mut App) {
     register(cx);
-    Theme::sync_system_appearance(None, cx);
+    apply_appearance(None, cx);
     set_zoom(100, cx);
     highlight_markdown();
 }
 
-/// The settings changed: the themes take the editor font again and the one showing is applied
-/// anew, at the same zoom.
+/// The settings changed: the appearance, the editor font and its size are applied anew.
 pub fn settings_changed(cx: &mut App) {
-    register(cx);
-    let mode = Theme::global(cx).mode;
-    Theme::change(mode, None, cx);
+    apply_appearance(None, cx);
+}
+
+/// Light or dark paper as the settings say, or as macOS is set (then again whenever macOS changes).
+pub fn apply_appearance(window: Option<&mut Window>, cx: &mut App) {
+    match crate::settings(cx).appearance {
+        Appearance::System => Theme::sync_system_appearance(window, cx),
+        Appearance::Light => Theme::change(ThemeMode::Light, window, cx),
+        Appearance::Dark => Theme::change(ThemeMode::Dark, window, cx),
+    }
+    // A theme brings the font and sizes it was registered with at start (registering again does
+    // not replace it): the settings' font and the current zoom go back on top.
+    let font: SharedString = editor_font(cx).into();
+    Theme::update(cx, |theme| theme.mono_font_family = font);
     set_zoom(cx.try_global::<Zoom>().map_or(100, |zoom| zoom.0), cx);
 }
 

@@ -8,7 +8,7 @@ use gpui_kit::{
     },
     *,
 };
-use subwy_project::settings::{Settings, SoftWrap};
+use subwy_project::settings::{Appearance, Settings, SoftWrap};
 
 use crate::{
     settings, theme,
@@ -197,6 +197,66 @@ fn editor_page(cx: &App) -> SettingPage {
     ])
 }
 
+fn appearance_value(appearance: Appearance) -> SharedString {
+    match appearance {
+        Appearance::System => "system",
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    }
+    .into()
+}
+
+fn appearance_page() -> SettingPage {
+    SettingPage::new("Appearance").group(
+        SettingGroup::new().items([
+            SettingItem::new(
+                "Appearance",
+                SettingField::dropdown(
+                    vec![
+                        ("system".into(), "As macOS".into()),
+                        ("light".into(), "Light".into()),
+                        ("dark".into(), "Dark".into()),
+                    ],
+                    |cx| appearance_value(settings(cx).appearance),
+                    |value, cx| {
+                        let appearance = match value.as_ref() {
+                            "light" => Appearance::Light,
+                            "dark" => Appearance::Dark,
+                            _ => Appearance::System,
+                        };
+                        update_settings(cx, |s| s.appearance = appearance)
+                    },
+                )
+                .default_value(appearance_value(Appearance::System)),
+            )
+            .description("Light or dark paper; As macOS follows the system as it changes."),
+            SettingItem::new(
+                "Zoom",
+                SettingField::dropdown(
+                    theme::ZOOM_STEPS
+                        .iter()
+                        .map(|step| (step.to_string().into(), format!("{step}%").into()))
+                        .collect(),
+                    |cx| {
+                        let zoom = cx.try_global::<theme::Zoom>().map_or(100, |zoom| zoom.0);
+                        zoom.to_string().into()
+                    },
+                    |value, cx| {
+                        if let Ok(percent) = value.parse() {
+                            theme::set_zoom(percent, cx);
+                            cx.defer(crate::workspace::zoom_changed);
+                        }
+                    },
+                )
+                .default_value(SharedString::from("100")),
+            )
+            .description(
+                "The whole window, as Cmd+= and Cmd+- step it; kept with the open windows.",
+            ),
+        ]),
+    )
+}
+
 fn tree_page() -> SettingPage {
     SettingPage::new("Tree").group(SettingGroup::new().items([
         switch(
@@ -222,6 +282,10 @@ impl Render for SettingsView {
             .size_full()
             .bg(c(p.paper))
             .text_size(z(theme::size::UI_TEXT, cx))
-            .child(Pages::new("subwy-settings").pages([editor_page(cx), tree_page()]))
+            .child(Pages::new("subwy-settings").pages([
+                editor_page(cx),
+                appearance_page(),
+                tree_page(),
+            ]))
     }
 }

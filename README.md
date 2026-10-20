@@ -139,6 +139,7 @@ first run; changes made to it by hand apply the next time subwy starts.
   "show_whitespace": false,
   "indent_guides": true,
   "folding": true,
+  "appearance": "system",
   "key_hints": true,
   "show_ignored": true,
   "keymap": [
@@ -147,7 +148,7 @@ first run; changes made to it by hand apply the next time subwy starts.
 }
 ```
 
-`soft_wrap` is `markdown`, `all` or `none`. `show_ignored` set to `false` leaves gitignored items out of the tree
+`soft_wrap` is `markdown`, `all` or `none`; `appearance` is `system`, `light` or `dark`. `show_ignored` set to `false` leaves gitignored items out of the tree
 (the tree's more menu switches it for the window). Entries in `keymap` are added after subwy's own keys, so they win.
 A file that does not parse is ignored (with the reason in the status bar) and the defaults are used.
 

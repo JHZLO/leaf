@@ -27,12 +27,24 @@ pub struct Settings {
     pub indent_guides: bool,
     /// Code blocks fold from the gutter.
     pub folding: bool,
+    /// Light, dark, or as macOS is set.
+    pub appearance: Appearance,
     /// The key hint line under the tree.
     pub key_hints: bool,
     /// Gitignored items in the tree, dimmed; `false` leaves them out.
     pub show_ignored: bool,
     /// Extra key bindings, applied after subwy's own (so they win).
     pub keymap: Vec<KeyOverride>,
+}
+
+/// Light or dark paper; `System` follows macOS, as subwy always did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 /// Which files wrap long lines. Wrapping costs time on large files, so Markdown only by default.
@@ -67,6 +79,7 @@ impl Default for Settings {
             show_whitespace: false,
             indent_guides: true,
             folding: true,
+            appearance: Appearance::System,
             key_hints: true,
             show_ignored: true,
             keymap: Vec::new(),

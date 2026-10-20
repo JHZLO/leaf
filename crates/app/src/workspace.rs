@@ -302,6 +302,14 @@ fn live_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
         .unwrap_or_default()
 }
 
+/// The zoom changed in the Settings tab: the session keeps it, as with Cmd+= and Cmd+-.
+pub fn zoom_changed(cx: &mut App) {
+    if let Some((_, workspace)) = live_windows(cx).into_iter().next() {
+        workspace.update(cx, |workspace, cx| workspace.schedule_save(cx));
+    }
+    cx.refresh_windows();
+}
+
 /// The settings changed (the Settings tab): every window shows them at once.
 pub fn settings_changed(cx: &mut App) {
     theme::settings_changed(cx);
@@ -351,7 +359,7 @@ impl Workspace {
                 async {}
             }),
             cx.observe_window_appearance(window, |_, window, cx| {
-                gpui_kit::component::Theme::sync_system_appearance(Some(window), cx);
+                theme::apply_appearance(Some(window), cx);
             }),
         ];
         // The close button asks first when tabs have unsaved changes.
