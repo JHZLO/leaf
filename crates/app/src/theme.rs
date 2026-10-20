@@ -300,6 +300,23 @@ fn theme_config(name: &str, mode: &str, p: &Palette, cx: &App) -> serde_json::Va
 
 /// Registers the subwy light and dark themes and follows the system appearance.
 pub fn init(cx: &mut App) {
+    register(cx);
+    Theme::sync_system_appearance(None, cx);
+    set_zoom(100, cx);
+    highlight_markdown();
+}
+
+/// The settings changed: the themes take the editor font again and the one showing is applied
+/// anew, at the same zoom.
+pub fn settings_changed(cx: &mut App) {
+    register(cx);
+    let mode = Theme::global(cx).mode;
+    Theme::change(mode, None, cx);
+    set_zoom(cx.try_global::<Zoom>().map_or(100, |zoom| zoom.0), cx);
+}
+
+/// Registers the subwy light and dark themes, which carry the editor font from the settings.
+fn register(cx: &mut App) {
     let set = serde_json::json!({
         "name": "subwy",
         "themes": [theme_config("Subwy Light", "light", &LIGHT, cx), theme_config("Subwy Dark", "dark", &DARK, cx)],
@@ -319,9 +336,6 @@ pub fn init(cx: &mut App) {
             theme.dark_theme = dark;
         }
     });
-    Theme::sync_system_appearance(None, cx);
-    set_zoom(100, cx);
-    highlight_markdown();
 }
 
 /// Swaps in subwy's Markdown highlights, which also mark tables, task boxes and link definitions.

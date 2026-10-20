@@ -5,7 +5,7 @@ use gpui_kit::*;
 
 use crate::keymap::{
     CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusTree, NewWindow, NextTab, OpenFolder,
-    PrevTab, Quit, RevealInFinder, Save, TogglePreview, ZoomIn, ZoomOut, ZoomReset,
+    OpenSettings, PrevTab, Quit, RevealInFinder, Save, TogglePreview, ZoomIn, ZoomOut, ZoomReset,
 };
 
 fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
@@ -18,7 +18,14 @@ fn menu(name: &str, items: Vec<MenuItem>) -> Menu {
 
 pub fn init(cx: &mut App) {
     cx.set_menus(vec![
-        menu("subwy", vec![MenuItem::action("Quit subwy", Quit)]),
+        menu(
+            "subwy",
+            vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit subwy", Quit),
+            ],
+        ),
         menu(
             "File",
             vec![

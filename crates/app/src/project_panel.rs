@@ -463,6 +463,18 @@ impl ProjectPanel {
         &self.folders
     }
 
+    /// The settings changed: the hint line and gitignored items follow them.
+    pub fn apply_settings(&mut self, cx: &mut Context<Self>) {
+        let settings = crate::settings(cx);
+        self.show_key_hints = settings.key_hints;
+        let show_ignored = settings.show_ignored;
+        if self.tree.shows_ignored() != show_ignored {
+            self.tree.set_show_ignored(show_ignored);
+            self.reveal_selection();
+        }
+        cx.notify();
+    }
+
     /// Reopens the folders and the selection a session saved; folders that no longer exist stay closed.
     pub fn restore(
         &mut self,

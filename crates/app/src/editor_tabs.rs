@@ -24,6 +24,7 @@ use subwy_project::{
 use crate::{
     keymap::{IndentItem, MARKDOWN, Newline, OutdentItem, ToggleBold, ToggleItalic},
     preview::Preview,
+    settings_view::SettingsView,
     theme::{self, Palette, c, size, z},
 };
 
@@ -90,6 +91,10 @@ pub struct EditorTabs {
     focus_handle: FocusHandle,
     /// The last file that could not be opened, and why; shown in the status bar.
     pub error: Option<String>,
+    /// The Settings tab (Cmd+,), after the file tabs once opened.
+    settings: Option<Entity<SettingsView>>,
+    /// The Settings tab is in front; `active` keeps the file tab to go back to.
+    settings_shown: bool,
 }
 
 impl EventEmitter<TabsChanged> for EditorTabs {}
@@ -97,6 +102,9 @@ impl EventEmitter<TabsChanged> for EditorTabs {}
 impl Focusable for EditorTabs {
     /// The active tab's editor, unless only its preview shows: keys must not edit hidden text.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
+        if let Some(settings) = self.settings.as_ref().filter(|_| self.settings_shown) {
+            return settings.read(cx).focus_handle(cx);
+        }
         match self.active_tab() {
             Some(tab) if !self.editor_hidden() => tab.editor.focus_handle(cx),
             _ => self.focus_handle.clone(),
@@ -211,11 +219,63 @@ impl EditorTabs {
             split: 0.5,
             focus_handle: cx.focus_handle(),
             error: None,
+            settings: None,
+            settings_shown: false,
         }
     }
 
+    /// The file tab in front; none while the Settings tab is, so nothing acts on a hidden file.
     pub fn active_tab(&self) -> Option<&Tab> {
+        if self.settings_shown {
+            return None;
+        }
         self.active.and_then(|i| self.tabs.get(i))
+    }
+
+    pub fn settings_shown(&self) -> bool {
+        self.settings_shown
+    }
+
+    /// Cmd+, : opens the Settings tab, or brings it to the front, with the keyboard.
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self
+            .settings
+            .get_or_insert_with(|| cx.new(SettingsView::new))
+            .clone();
+        self.settings_shown = true;
+        view.read(cx).focus_handle(cx).focus(window, cx);
+        self.refresh_preview(cx);
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        if std::mem::take(&mut self.settings_shown) {
+            self.focus_active(window, cx);
+        }
+        self.refresh_preview(cx);
+        cx.emit(TabsChanged);
+        cx.notify();
+    }
+
+    /// The settings changed: open editors take the new wrapping and tab size.
+    pub fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = crate::settings(cx).clone();
+        for tab in &self.tabs {
+            let wrap = settings.wraps(tab.is_markdown());
+            tab.editor.update(cx, |state, cx| {
+                state.set_soft_wrap(wrap, window, cx);
+                state.set_tab_size(
+                    TabSize {
+                        tab_size: settings.tab_size,
+                        hard_tabs: false,
+                    },
+                    cx,
+                );
+            });
+        }
+        cx.notify();
     }
 
     /// The color of the route line that reaches `path` in the tree, so a file's tab and its
@@ -499,6 +559,7 @@ impl EditorTabs {
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         // Focus follows the switch only when it was already in the editor, so Space in the tree keeps it there.
         let had_focus = self.focus_handle.contains_focused(window, cx);
+        self.settings_shown = false;
         self.active = Some(index);
         if had_focus {
             self.focus_active(window, cx);
@@ -513,11 +574,20 @@ impl EditorTabs {
     }
 
     pub fn activate_offset(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(active) = self.active else { return };
-        let len = self.tabs.len() as isize;
-        let next = (active as isize + offset).rem_euclid(len) as usize;
-        self.activate(next, window, cx);
-        self.focus_active(window, cx);
+        // The Settings tab, when open, is the place after the last file tab.
+        let len = (self.tabs.len() + usize::from(self.settings.is_some())) as isize;
+        let current = match (self.settings_shown, self.active) {
+            (true, _) => self.tabs.len(),
+            (false, Some(active)) => active,
+            (false, None) => return,
+        };
+        let next = (current as isize + offset).rem_euclid(len.max(1)) as usize;
+        if next == self.tabs.len() {
+            self.open_settings(window, cx);
+        } else {
+            self.activate(next, window, cx);
+            self.focus_active(window, cx);
+        }
     }
 
     /// Saves the active tab off the main thread. Failures go to [`Self::error`].
@@ -699,7 +769,9 @@ impl EditorTabs {
 
     /// Closes the active tab, asking first when it has unsaved edits.
     pub fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.active {
+        if self.settings_shown {
+            self.close_settings(window, cx);
+        } else if let Some(index) = self.active {
             self.close_at(index, window, cx);
         }
     }
@@ -1189,6 +1261,59 @@ impl EditorTabs {
         });
     }
 
+    /// The Settings tab after the file tabs: a cog, the name, and its x; the line under it when in
+    /// front is the accent, as no route reaches it.
+    fn render_settings_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = theme::colors(cx);
+        let active = self.settings_shown;
+        div()
+            .id("settings-tab")
+            .relative()
+            .flex_none()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(z(8., cx))
+            .px(z(12., cx))
+            .text_color(c(if active { p.ink } else { p.sub }))
+            .when(active, |el| el.font_weight(FontWeight::MEDIUM))
+            .when(!active, |el| el.hover(|style| style.text_color(c(p.ink))))
+            .child(Icon::new(IconName::Settings).size(z(13., cx)))
+            .child("Settings")
+            .child(
+                div()
+                    .id("settings-tab-close")
+                    .flex_none()
+                    .size(z(16., cx))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(z(4., cx))
+                    .text_color(c(p.sub))
+                    .hover(|style| style.bg(c(p.guide)).text_color(c(p.ink)))
+                    .child(Icon::new(IconName::X).size(z(12., cx)))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.close_settings(window, cx);
+                    })),
+            )
+            .when(active, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(z(12., cx))
+                        .right(z(12., cx))
+                        .bottom_0()
+                        .h(z(2., cx))
+                        .rounded(z(1., cx))
+                        .bg(c(p.accent)),
+                )
+            })
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.open_settings(window, cx)),
+            )
+    }
+
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
         let tabs: Vec<_> = self
@@ -1196,7 +1321,7 @@ impl EditorTabs {
             .iter()
             .enumerate()
             .map(|(i, tab)| {
-                let active = self.active == Some(i);
+                let active = !self.settings_shown && self.active == Some(i);
                 let name = file_name(&tab.path);
                 let station = self.station_color(&tab.path, p);
                 let group = SharedString::from(format!("editor-tab-{i}"));
@@ -1291,7 +1416,12 @@ impl EditorTabs {
                     .min_w_0()
                     .flex()
                     .overflow_x_hidden()
-                    .children(tabs),
+                    .children(tabs)
+                    .children(
+                        self.settings
+                            .is_some()
+                            .then(|| self.render_settings_tab(cx)),
+                    ),
             )
             .when(markdown, |el| {
                 el.child(
@@ -1410,8 +1540,9 @@ impl Render for EditorTabs {
         let p = theme::colors(cx);
         // In a column under the banner, so it takes the height left rather than all of it.
         let body = div().flex_1().min_h_0();
+        let settings = self.settings.clone().filter(|_| self.settings_shown);
         let body = match self.active_tab() {
-            None => body.bg(c(p.paper)),
+            None => body.bg(c(p.paper)).children(settings),
             Some(tab) => {
                 let editor = Editor::new(&tab.editor)
                     .bordered(false)

@@ -15,9 +15,9 @@ use crate::{
     finder::{self, Finder, FinderEvent},
     keymap::{
         CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusEditor, FocusTree, NewTerminal,
-        NewWindow, NextTab, Open, OpenFolder, PrevTab, Quit, RevealInFinder, Save, SelectNext,
-        SelectPrev, ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn,
-        ZoomOut, ZoomReset,
+        NewWindow, NextTab, Open, OpenFolder, OpenSettings, PrevTab, Quit, RevealInFinder, Save,
+        SelectNext, SelectPrev, ToggleFinder, TogglePreview, ToggleSearch, ToggleTerminal,
+        WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{DraggedItems, FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
@@ -300,6 +300,17 @@ fn live_windows(cx: &App) -> Vec<(AnyWindowHandle, Entity<Workspace>)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The settings changed (the Settings tab): every window shows them at once.
+pub fn settings_changed(cx: &mut App) {
+    theme::settings_changed(cx);
+    for (handle, workspace) in live_windows(cx) {
+        let _ = handle.update(cx, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.apply_settings(window, cx))
+        });
+    }
+    cx.refresh_windows();
 }
 
 /// A window closed while others stay open drops out of the session. The app does not call this
@@ -841,6 +852,24 @@ impl Workspace {
         Some(tabs.active_tab()?.editor.read(cx).value().to_string())
     }
 
+    /// Shows changed settings in this window's tabs and tree.
+    fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs
+            .update(cx, |tabs, cx| tabs.apply_settings(window, cx));
+        if let Some(panel) = &self.panel {
+            panel.update(cx, |panel, cx| panel.apply_settings(cx));
+        }
+        cx.notify();
+    }
+
+    /// Cmd+, : the Settings tab, in front with the keyboard.
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.overlay = None;
+        self.tabs
+            .update(cx, |tabs, cx| tabs.open_settings(window, cx));
+        cx.notify();
+    }
+
     /// The active tab's file, relative to the open folder.
     pub fn active_file(&self, cx: &App) -> Option<PathBuf> {
         self.tabs.read(cx).active_tab().map(|t| t.path.clone())
@@ -850,6 +879,11 @@ impl Workspace {
     /// checks.
     pub fn tabs_message(&self, cx: &App) -> Option<String> {
         self.tabs.read(cx).error.clone()
+    }
+
+    /// Whether the Settings tab is in front; for the UI checks.
+    pub fn settings_shown(&self, cx: &App) -> bool {
+        self.tabs.read(cx).settings_shown()
     }
 
     /// Every tab's file, in tab order; for the UI checks.
@@ -1444,6 +1478,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::copy_relative_path))
             .on_action(cx.listener(Self::copy_file_name))
+            .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::reveal_in_finder))
             .when(self.panel.is_none(), |el| {
@@ -1529,8 +1564,13 @@ impl Render for Workspace {
                                         },
                                     ))
                                     .map(|el| match self.panel {
-                                        Some(_) => el.child(self.tabs.clone()),
-                                        None => {
+                                        // The Settings tab opens in the empty window too.
+                                        _ if self.panel.is_some()
+                                            || self.tabs.read(cx).settings_shown() =>
+                                        {
+                                            el.child(self.tabs.clone())
+                                        }
+                                        _ => {
                                             let this = cx.entity().downgrade();
                                             el.child(empty_state::render(
                                                 &self.recent_shown(cx),

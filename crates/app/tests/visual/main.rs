@@ -12,6 +12,7 @@ mod markdown_view;
 mod phase1;
 mod preview_sync;
 mod search;
+mod settings;
 mod terminal;
 mod tree;
 mod windows;
@@ -66,6 +67,7 @@ fn main() {
     islands::run(&mut check);
     markdown_view::run(&mut check);
     folders::run(&mut check);
+    settings::run(&mut check);
 
     if check.failures.is_empty() {
         println!("visual checks passed; screenshots in target/visual/");

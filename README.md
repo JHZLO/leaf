@@ -90,6 +90,7 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 |---|---|---|
 | Anywhere | `Cmd+O` | Open a folder (a window with folders asks: add it to this window, or open a new one) |
 | | `Cmd+Shift+N` | New window |
+| | `Cmd+,` | Settings |
 | | `Cmd+1` | Focus the tree (again: hide it) |
 | | `Cmd+Shift+O` | Find a file by name |
 | | `Cmd+Shift+F` | Find text in the folder; from the tree with a folder selected, in that folder only |
@@ -123,8 +124,9 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 
 ## Settings
 
-subwy writes `~/Library/Application Support/subwy/settings.json` with the defaults on first run.
-Changes apply the next time subwy starts.
+`Cmd+,` opens the Settings tab: switches, numbers and lists that apply to every window at once and are
+written to `~/Library/Application Support/subwy/settings.json`. subwy writes that file with the defaults on
+first run; changes made to it by hand apply the next time subwy starts.
 
 ```json
 {

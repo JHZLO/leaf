@@ -26,6 +26,7 @@ gpui_kit::assets::icon_assets!(
         SquareCode,
         FolderPlus,
         FolderMinus,
+        Settings,
     ]
 );
 

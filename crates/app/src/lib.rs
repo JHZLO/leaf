@@ -14,6 +14,7 @@ mod preview;
 mod project_panel;
 mod route;
 mod search_panel;
+mod settings_view;
 mod status_bar;
 mod terminal_panel;
 mod terminal_tabs;
@@ -21,15 +22,21 @@ pub mod theme;
 mod title_bar;
 pub mod workspace;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
-use gpui_kit::{App, Global};
+use gpui_kit::{App, AppContext as _, Global, Task};
 use subwy_project::settings::{self, Settings};
 
-/// The user's settings, read once at startup, and why the file could not be used, if it could not.
+/// The user's settings, read at startup and changed by the Settings tab, and why the file could
+/// not be used, if it could not.
 pub struct UserSettings {
     pub settings: Settings,
     pub error: Option<String>,
+    /// The file was read (or there was none). A file that could not be read is never written over:
+    /// changes made in the Settings tab then last until subwy quits.
+    writable: bool,
+    /// Writes the file a moment after the last change; a newer change replaces it.
+    saving: Task<()>,
 }
 
 impl Global for UserSettings {}
@@ -38,12 +45,43 @@ pub fn settings(cx: &App) -> &Settings {
     &cx.global::<UserSettings>().settings
 }
 
+/// How long the file waits after a change, so dragging a number writes it once.
+const SAVE_SETTINGS_AFTER: Duration = Duration::from_millis(300);
+
+/// Changes the settings (the Settings tab): every window shows the change at once, and the file
+/// is written off the main thread a moment later.
+pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
+    let state = cx.global_mut::<UserSettings>();
+    change(&mut state.settings);
+    let (settings, writable) = (state.settings.clone(), state.writable);
+    if writable {
+        let saving = cx.spawn(async move |cx| {
+            cx.background_executor().timer(SAVE_SETTINGS_AFTER).await;
+            let path = settings::default_path();
+            let saved = cx
+                .background_spawn(async move { settings::save(&path, &settings) })
+                .await;
+            if let Err(err) = saved {
+                eprintln!("subwy: settings not saved: {err}");
+            }
+        });
+        cx.global_mut::<UserSettings>().saving = saving;
+    }
+    // After the update that called this: windows are updated one by one, the caller's too.
+    cx.defer(workspace::settings_changed);
+}
+
 /// Registers subwy's settings, theme, keys and the shared session; what both the app and the UI
 /// tests start from.
 pub fn init(cx: &mut App) {
     let (settings, error) = settings::load(&settings::default_path());
     let overrides = settings.keymap.clone();
-    cx.set_global(UserSettings { settings, error });
+    cx.set_global(UserSettings {
+        settings,
+        writable: error.is_none(),
+        error,
+        saving: Task::ready(()),
+    });
     gpui_kit::init(cx);
     theme::init(cx);
     keymap::init(cx);

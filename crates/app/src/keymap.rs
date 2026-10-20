@@ -29,6 +29,7 @@ actions!(
         ToggleSearch,
         NewWindow,
         ToggleTerminal,
+        OpenSettings,
     ]
 );
 
@@ -136,6 +137,8 @@ pub fn init(cx: &mut App) {
     let panel = Some(PROJECT_PANEL);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        // macOS's Settings key; in any window, the empty one too.
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-o", OpenFolder, ws),
         KeyBinding::new("cmd-shift-n", NewWindow, ws),
         KeyBinding::new("cmd-1", FocusTree, ws),

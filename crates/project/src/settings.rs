@@ -107,6 +107,18 @@ fn validate(settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
+/// Writes the settings the Settings tab changed: to a file beside it first, then in its place, so
+/// a crash in between leaves the old file whole.
+pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_vec_pretty(settings).map_err(io::Error::other)?;
+    let temp = path.with_extension("json.saving");
+    std::fs::write(&temp, json)?;
+    std::fs::rename(&temp, path)
+}
+
 /// Writes the defaults when there is no settings file yet, so there is something to edit.
 pub fn write_default_if_missing(path: &Path) -> io::Result<()> {
     if path.exists() {
@@ -237,5 +249,23 @@ mod tests {
         assert!(settings.wraps(false));
         settings.soft_wrap = SoftWrap::None;
         assert!(!settings.wraps(true));
+    }
+
+    #[test]
+    fn saved_settings_read_back_and_leave_no_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subwy/settings.json");
+        let settings = Settings {
+            tab_size: 2,
+            key_hints: false,
+            ..Settings::default()
+        };
+        save(&path, &settings).unwrap();
+        assert_eq!(load(&path), (settings, None));
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["settings.json"]);
     }
 }
