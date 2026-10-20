@@ -160,7 +160,39 @@ fn editor_page(cx: &App) -> SettingPage {
                 )
                 .default_value(defaults.tab_size as f64),
             )
-            .description("Spaces Tab puts in code."),
+            .description("How wide a tab is, and how many spaces Tab puts in code."),
+            switch(
+                "Indent with tabs",
+                "Tab puts a tab character instead of spaces.",
+                |s| s.hard_tabs,
+                |s, on| s.hard_tabs = on,
+            ),
+        ]),
+        SettingGroup::new().title("Display").items([
+            switch(
+                "Line numbers",
+                "Numbers in the gutter left of the text.",
+                |s| s.line_numbers,
+                |s, on| s.line_numbers = on,
+            ),
+            switch(
+                "Show whitespace",
+                "Spaces and tabs as faint marks.",
+                |s| s.show_whitespace,
+                |s, on| s.show_whitespace = on,
+            ),
+            switch(
+                "Indent guides",
+                "Faint lines down each indent level.",
+                |s| s.indent_guides,
+                |s, on| s.indent_guides = on,
+            ),
+            switch(
+                "Code folding",
+                "Blocks fold and unfold from the gutter.",
+                |s| s.folding,
+                |s, on| s.folding = on,
+            ),
         ]),
     ])
 }

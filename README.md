@@ -133,7 +133,12 @@ first run; changes made to it by hand apply the next time subwy starts.
   "editor_font": "SF Mono",
   "editor_font_size": 13.0,
   "tab_size": 4,
+  "hard_tabs": false,
   "soft_wrap": "markdown",
+  "line_numbers": true,
+  "show_whitespace": false,
+  "indent_guides": true,
+  "folding": true,
   "key_hints": true,
   "show_ignored": true,
   "keymap": [

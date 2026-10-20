@@ -16,7 +16,17 @@ pub struct Settings {
     pub editor_font_size: f32,
     /// Spaces a Tab inserts in code.
     pub tab_size: usize,
+    /// Tab inserts a tab character instead of spaces.
+    pub hard_tabs: bool,
     pub soft_wrap: SoftWrap,
+    /// Line numbers in the editor's gutter.
+    pub line_numbers: bool,
+    /// Spaces and tabs drawn as faint marks.
+    pub show_whitespace: bool,
+    /// Faint lines down each indent level.
+    pub indent_guides: bool,
+    /// Code blocks fold from the gutter.
+    pub folding: bool,
     /// The key hint line under the tree.
     pub key_hints: bool,
     /// Gitignored items in the tree, dimmed; `false` leaves them out.
@@ -51,7 +61,12 @@ impl Default for Settings {
             editor_font: "SF Mono".into(),
             editor_font_size: 13.,
             tab_size: 4,
+            hard_tabs: false,
             soft_wrap: SoftWrap::Markdown,
+            line_numbers: true,
+            show_whitespace: false,
+            indent_guides: true,
+            folding: true,
             key_hints: true,
             show_ignored: true,
             keymap: Vec::new(),

@@ -48,6 +48,20 @@ pub fn run(check: &mut Check) {
         active,
         Some(PathBuf::from("docs/notes.md")),
     );
+    // Open editors take editor changes at once: no line numbers, whitespace shown.
+    check.cx.update(|cx| {
+        subwy::update_settings(cx, |s| {
+            s.line_numbers = false;
+            s.show_whitespace = true;
+        })
+    });
+    check.shot(window, "settings-2-editor-options");
+    check.cx.update(|cx| {
+        subwy::update_settings(cx, |s| {
+            s.line_numbers = true;
+            s.show_whitespace = false;
+        })
+    });
     check.keys(window, "cmd-, cmd-w");
     let shown = check.workspace(window, |w, cx| w.settings_shown(cx));
     check.expect_eq("cmd-w closes the Settings tab", shown, false);

@@ -142,6 +142,14 @@ fn active_after_close(active: Option<usize>, closed: usize, len: usize) -> Optio
     }
 }
 
+/// What Tab inserts, from the settings.
+fn tab_size(settings: &subwy_project::settings::Settings) -> TabSize {
+    TabSize {
+        tab_size: settings.tab_size,
+        hard_tabs: settings.hard_tabs,
+    }
+}
+
 fn language_for(path: &Path) -> SharedString {
     let ext = path
         .extension()
@@ -259,20 +267,18 @@ impl EditorTabs {
         cx.notify();
     }
 
-    /// The settings changed: open editors take the new wrapping and tab size.
+    /// The settings changed: open editors take them as new ones would.
     pub fn apply_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = crate::settings(cx).clone();
         for tab in &self.tabs {
             let wrap = settings.wraps(tab.is_markdown());
             tab.editor.update(cx, |state, cx| {
+                state.set_line_number(settings.line_numbers, window, cx);
                 state.set_soft_wrap(wrap, window, cx);
-                state.set_tab_size(
-                    TabSize {
-                        tab_size: settings.tab_size,
-                        hard_tabs: false,
-                    },
-                    cx,
-                );
+                state.set_tab_size(tab_size(&settings), cx);
+                state.set_show_whitespaces(settings.show_whitespace, window, cx);
+                state.set_indent_guides(settings.indent_guides, window, cx);
+                state.set_folding(settings.folding, window, cx);
             });
         }
         cx.notify();
@@ -496,14 +502,15 @@ impl EditorTabs {
         }
         let markdown = language == "markdown";
         let editor = cx.new(|cx| {
+            let settings = crate::settings(cx).clone();
             EditorState::new(window, cx)
                 .language(language.clone())
-                .line_number(true)
-                .soft_wrap(crate::settings(cx).wraps(markdown))
-                .tab_size(TabSize {
-                    tab_size: crate::settings(cx).tab_size,
-                    hard_tabs: false,
-                })
+                .line_number(settings.line_numbers)
+                .soft_wrap(settings.wraps(markdown))
+                .tab_size(tab_size(&settings))
+                .show_whitespaces(settings.show_whitespace)
+                .indent_guides(settings.indent_guides)
+                .folding(settings.folding)
                 .default_value(file.text)
         });
         let subscriptions = vec![
