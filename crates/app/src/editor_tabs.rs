@@ -663,7 +663,13 @@ impl EditorTabs {
     pub fn renamed(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
         let moved = |path: &mut PathBuf| {
             if let Ok(rest) = path.strip_prefix(from) {
-                *path = to.join(rest);
+                // `join("")` would leave a trailing slash, and the disk would then take the file
+                // for a folder ("Not a directory").
+                *path = if rest.as_os_str().is_empty() {
+                    to.to_path_buf()
+                } else {
+                    to.join(rest)
+                };
             }
         };
         self.tabs.iter_mut().for_each(|tab| moved(&mut tab.path));

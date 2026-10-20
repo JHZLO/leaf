@@ -43,11 +43,12 @@ fn tabs_follow(check: &mut Check) {
         Some(PathBuf::from("docs/notes.md")),
     );
     check.keys(window, "cmd-1 shift-f6 cmd-a j o u r n a l . m d enter");
+    // As text: paths compare equal with a trailing slash, which the disk does not forgive.
     let active = check.workspace(window, |w, cx| w.active_file(cx));
     check.expect_eq(
         "the open tab follows a rename",
-        active,
-        Some(PathBuf::from("docs/journal.md")),
+        active.map(|path| path.to_string_lossy().into_owned()),
+        Some("docs/journal.md".into()),
     );
     // Open a nested file from the finder; the tree opens its folders and selects it.
     check.keys(window, "cmd-1 left left up cmd-shift-o g p a t h enter");
