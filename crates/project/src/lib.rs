@@ -8,6 +8,7 @@ pub mod fuzzy;
 pub mod index;
 pub mod markdown;
 pub mod nav;
+pub mod network;
 pub mod paths;
 pub mod search;
 pub mod session;

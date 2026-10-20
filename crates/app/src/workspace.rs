@@ -7,17 +7,21 @@ use std::{
 };
 
 use gpui_kit::{prelude::FluentBuilder as _, *};
-use subwy_project::{folders::Folders, paths, session, watch};
+use subwy_project::{
+    folders::Folders,
+    network::{Network, Way},
+    paths, session, watch,
+};
 
 use crate::{
     editor_tabs::{EditorTabs, TabsChanged},
     empty_state,
     finder::{self, Finder, FinderEvent},
     keymap::{
-        CloseSettings, CloseTab, CopyFileName, CopyPath, CopyRelativePath, FocusEditor, FocusTree,
-        NewTerminal, NewWindow, NextTab, Open, OpenFolder, OpenSettings, PrevTab, Quit,
-        RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview, ToggleSearch,
-        ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
+        CloseSettings, CloseTab, Collapse, CopyFileName, CopyPath, CopyRelativePath, Expand,
+        FocusEditor, FocusTree, NewTerminal, NewWindow, NextTab, Open, OpenFolder, OpenSettings,
+        PrevTab, Quit, RevealInFinder, Save, SelectNext, SelectPrev, ToggleFinder, TogglePreview,
+        ToggleSearch, ToggleTerminal, WORKSPACE, ZoomIn, ZoomOut, ZoomReset,
     },
     project_panel::{DraggedItems, FileEvent, PanelEvent, ProjectPanel, ResizeDrag},
     search_panel::{self, SearchEvent, SearchPanel},
@@ -432,11 +436,11 @@ impl Workspace {
         }
     }
 
-    fn move_recent(&mut self, step: isize, cx: &mut Context<Self>) {
-        let count = self.recent_shown(cx).len();
-        if count > 0 {
-            self.recent_selected =
-                (self.recent_selected as isize + step).clamp(0, count as isize - 1) as usize;
+    /// The arrows on the empty window's map: along a line and across to the next.
+    fn move_recent(&mut self, way: Way, cx: &mut Context<Self>) {
+        let recent = self.recent_shown(cx);
+        if let Some(last) = recent.len().checked_sub(1) {
+            self.recent_selected = Network::new(&recent).step(self.recent_selected.min(last), way);
             cx.notify();
         }
     }
@@ -1532,11 +1536,17 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::reveal_in_finder))
             .when(self.panel.is_none(), |el| {
-                el.on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_recent(-1, cx)))
-                    .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_recent(1, cx)))
-                    .on_action(cx.listener(|this, _: &Open, _, cx| {
-                        this.open_recent(this.recent_selected, cx)
-                    }))
+                el.on_action(
+                    cx.listener(|this, _: &SelectPrev, _, cx| this.move_recent(Way::Up, cx)),
+                )
+                .on_action(
+                    cx.listener(|this, _: &SelectNext, _, cx| this.move_recent(Way::Down, cx)),
+                )
+                .on_action(cx.listener(|this, _: &Collapse, _, cx| this.move_recent(Way::Left, cx)))
+                .on_action(cx.listener(|this, _: &Expand, _, cx| this.move_recent(Way::Right, cx)))
+                .on_action(
+                    cx.listener(|this, _: &Open, _, cx| this.open_recent(this.recent_selected, cx)),
+                )
             })
             .on_action(cx.listener(Self::close_tab))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
@@ -1625,6 +1635,7 @@ impl Render for Workspace {
                                                         this.open_recent(index, cx)
                                                     });
                                                 },
+                                                window,
                                                 cx,
                                             ))
                                         }

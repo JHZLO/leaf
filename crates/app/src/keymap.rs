@@ -208,9 +208,11 @@ fn own_keys() -> Vec<Own> {
         own("cmd-_", CollapseAll, panel),
         // A name being typed has its own Cmd+Z: its input is deeper and wins.
         own("cmd-z", UndoChange, panel),
-        // The recent folders on the empty window.
+        // The recent folders' map on the empty window.
         own("up", SelectPrev, Some("Workspace && empty")),
         own("down", SelectNext, Some("Workspace && empty")),
+        own("left", Collapse, Some("Workspace && empty")),
+        own("right", Expand, Some("Workspace && empty")),
         own("enter", Open, Some("Workspace && empty")),
         // Markdown editing keys (Phase 2) go below this line, in their own block.
         // gpui-kit binds enter and tab on its editor element ("Input"), deeper than any container.

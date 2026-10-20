@@ -117,6 +117,7 @@ macOS knows about (the one in `/Applications`). Set `SUBWY_APP=/path/to/subwy.ap
 | | drag | Rows onto a folder move there (hold `Option` to copy); onto the editor they open, onto the terminal their paths are typed. Files from Finder are copied into the folder they are dropped on |
 | | right-click | The row's menu: new file or folder, cut, copy, paste, copy the path or the name, find in the folder, rename, copy to, move to, trash, reveal in Finder, open in the terminal or the default app (arrows and `Enter` pick) |
 | | `Esc` | Back to the editor |
+| Empty window | arrows, `Enter` | The recent folders are drawn as a subway map, a line for each folder they sit in: `Left` / `Right` move along a line, `Up` / `Down` to the nearest station on the next line; `Enter` or a click opens it |
 | Terminal | `Cmd+C`, `Cmd+V` | Copy the selection, paste |
 | | `Cmd+W`, `Cmd+Shift+[` / `]` | Close the terminal tab, previous / next terminal tab |
 | Markdown | `Enter`, `Tab`, `Shift+Tab` | Continue a list, indent or outdent a list item |
