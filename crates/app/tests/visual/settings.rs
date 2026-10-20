@@ -89,6 +89,7 @@ pub fn run(check: &mut Check) {
     check.shot(window, "settings-4-tree");
     check.keys(window, "cmd-w");
     tree_options(check);
+    terminal_options(check);
     check.keys(window, "cmd-, cmd-w");
     let shown = check.workspace(window, |w, cx| w.settings_shown(cx));
     check.expect_eq("cmd-w closes the Settings tab", shown, false);
@@ -135,4 +136,18 @@ fn tree_options(check: &mut Check) {
         Some(PathBuf::from("README.md")),
     );
     change(check, window, |s| s.follow_active_file = true);
+}
+
+/// With Open with the folder off, a new window starts no shell until Alt+F12.
+fn terminal_options(check: &mut Check) {
+    let (first, second) = (fixture(), fixture());
+    let window = check.open(Some(first.path()));
+    change(check, window, |s| s.terminal_on_start = false);
+    let window = check.open(Some(second.path()));
+    let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("no shell starts with the folder", tabs, 0);
+    check.keys(window, "alt-f12");
+    let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("alt-f12 still starts one", tabs, 1);
+    change(check, window, |s| s.terminal_on_start = true);
 }

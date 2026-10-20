@@ -61,13 +61,15 @@ impl TerminalTabs {
 
     /// [`add`](Self::add), with the shell starting in `cwd` (the tree's Open in Terminal).
     pub fn add_in(&mut self, cwd: &Path, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let started = match TerminalPanel::start(cwd) {
-            Ok(started) => started,
-            Err(err) => {
-                eprintln!("subwy: could not start the shell: {err}");
-                return false;
-            }
-        };
+        let shell = crate::settings(cx).terminal_shell.trim().to_string();
+        let started =
+            match TerminalPanel::start(cwd, Some(shell.as_str()).filter(|s| !s.is_empty())) {
+                Ok(started) => started,
+                Err(err) => {
+                    eprintln!("subwy: could not start the shell: {err}");
+                    return false;
+                }
+            };
         let view = cx.new(|cx| TerminalPanel::new(started, window, cx));
         let subscription = cx.subscribe_in(
             &view,

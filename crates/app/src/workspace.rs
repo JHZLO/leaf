@@ -132,7 +132,7 @@ pub fn open_at_start(paths: Vec<PathBuf>, cx: &mut App) {
     for path in paths {
         opened |= open_path(&path, cx).is_some();
     }
-    if !opened {
+    if !opened && crate::settings(cx).reopen_windows {
         for root in session::load(&session::default_path())
             .windows
             .into_iter()
@@ -582,9 +582,11 @@ impl Workspace {
         // What the Window menu and the Dock list this window as.
         window.set_window_title(folders.name());
         self.watch(&folders, window, cx);
-        // The terminal is open from the start (the user asked for it on by default); focus stays in
-        // the tree.
-        self.show_terminal(window, cx);
+        // The terminal is open from the start (the user asked for it on by default, and the settings
+        // can turn it off); focus stays in the tree.
+        if crate::settings(cx).terminal_on_start {
+            self.show_terminal(window, cx);
+        }
         if let Some((expanded, selected, width, _)) = before {
             let expanded: Vec<PathBuf> = expanded
                 .iter()

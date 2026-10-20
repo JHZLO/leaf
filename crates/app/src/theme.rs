@@ -125,6 +125,13 @@ pub fn editor_text(cx: &App) -> f32 {
     crate::settings(cx).editor_font_size
 }
 
+/// The terminal's text size at 100% zoom: its own setting, or the editor's.
+pub fn terminal_text(cx: &App) -> f32 {
+    crate::settings(cx)
+        .terminal_font_size
+        .unwrap_or_else(|| editor_text(cx))
+}
+
 /// The palette for the current appearance.
 pub fn colors(cx: &App) -> &'static Palette {
     if cx.theme().is_dark() { &DARK } else { &LIGHT }

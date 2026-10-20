@@ -144,13 +144,18 @@ first run; changes made to it by hand apply the next time subwy starts.
   "show_ignored": true,
   "follow_active_file": true,
   "single_click_open": false,
+  "terminal_on_start": true,
+  "terminal_shell": "",
+  "terminal_font_size": null,
+  "reopen_windows": true,
   "keymap": [
     { "key": "cmd-p", "action": "workspace::ToggleFinder", "context": "Workspace" }
   ]
 }
 ```
 
-`soft_wrap` is `markdown`, `all` or `none`; `appearance` is `system`, `light` or `dark`. `show_ignored` set to `false` leaves gitignored items out of the tree
+`soft_wrap` is `markdown`, `all` or `none`; `appearance` is `system`, `light` or `dark`. An empty `terminal_shell`
+is your login shell, and a `null` `terminal_font_size` follows the editor's. `show_ignored` set to `false` leaves gitignored items out of the tree
 (the tree's more menu switches it for the window). Entries in `keymap` are added after subwy's own keys, so they win.
 A file that does not parse is ignored (with the reason in the status bar) and the defaults are used.
 

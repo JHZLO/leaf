@@ -286,6 +286,53 @@ fn tree_page() -> SettingPage {
     ]))
 }
 
+fn terminal_page() -> SettingPage {
+    SettingPage::new("Terminal").group(SettingGroup::new().items([
+        switch(
+            "Open with the folder",
+            "A window that opens a folder starts a shell under the editor; off, Alt+F12 starts it.",
+            |s| s.terminal_on_start,
+            |s, on| s.terminal_on_start = on,
+        ),
+        SettingItem::new(
+            "Shell",
+            SettingField::input(
+                |cx| settings(cx).terminal_shell.clone().into(),
+                |value, cx| update_settings(cx, |s| s.terminal_shell = value.to_string()),
+            )
+            .default_value(SharedString::default()),
+        )
+        .description("The program new terminal tabs run, such as /bin/zsh; empty is your login shell."),
+        SettingItem::new(
+            "Font size",
+            SettingField::number_input(
+                NumberFieldOptions {
+                    min: 6.,
+                    max: 72.,
+                    step: 1.,
+                },
+                |cx| theme::terminal_text(cx) as f64,
+                |value, cx| update_settings(cx, |s| s.terminal_font_size = Some(value as f32)),
+            )
+            // Back to the editor's size, whatever it is then.
+            .on_reset(
+                |cx| settings(cx).terminal_font_size.is_some(),
+                |_, cx| update_settings(cx, |s| s.terminal_font_size = None),
+            ),
+        )
+        .description("Points at 100% zoom; the editor's size until set."),
+    ]))
+}
+
+fn startup_page() -> SettingPage {
+    SettingPage::new("Startup").group(SettingGroup::new().item(switch(
+        "Reopen windows",
+        "subwy starts with the folders it had open when it quit.",
+        |s| s.reopen_windows,
+        |s, on| s.reopen_windows = on,
+    )))
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
@@ -298,6 +345,8 @@ impl Render for SettingsView {
                 editor_page(cx),
                 appearance_page(),
                 tree_page(),
+                terminal_page(),
+                startup_page(),
             ]))
     }
 }

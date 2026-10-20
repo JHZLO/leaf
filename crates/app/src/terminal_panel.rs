@@ -79,11 +79,13 @@ fn color(value: Rgb) -> Hsla {
 }
 
 impl TerminalPanel {
-    /// Starts the login shell in `cwd`. `SUBWY_SHELL` names another program, for the UI checks.
-    /// The panel sizes the grid when it first paints.
-    pub fn start(cwd: &Path) -> std::io::Result<Started> {
+    /// Starts `shell` in `cwd`, or the login shell. `SUBWY_SHELL` names another program, for the UI
+    /// checks. The panel sizes the grid when it first paints.
+    pub fn start(cwd: &Path, shell: Option<&str>) -> std::io::Result<Started> {
         let (tx, events) = smol::channel::unbounded();
-        let program = std::env::var("SUBWY_SHELL").ok();
+        let program = std::env::var("SUBWY_SHELL")
+            .ok()
+            .or_else(|| shell.map(str::to_string));
         let size = GridSize {
             cols: 80,
             rows: 24,
@@ -329,7 +331,7 @@ impl Render for TerminalPanel {
                     {
                         let entity = entity.clone();
                         move |bounds, window, cx| {
-                            let font_size = px(theme::editor_text(cx) * theme::zoom(cx));
+                            let font_size = px(theme::terminal_text(cx) * theme::zoom(cx));
                             let font = font(theme::editor_font(cx));
                             let text = window.text_system();
                             let id = text.resolve_font(&font);

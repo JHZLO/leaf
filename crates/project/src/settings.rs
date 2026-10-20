@@ -37,6 +37,14 @@ pub struct Settings {
     pub follow_active_file: bool,
     /// A file opens on the first click in the tree, not the second.
     pub single_click_open: bool,
+    /// A window opening a folder starts a shell under the editor.
+    pub terminal_on_start: bool,
+    /// The program new terminal tabs run; empty is the login shell.
+    pub terminal_shell: String,
+    /// The terminal's text size at 100% zoom; none is the editor's.
+    pub terminal_font_size: Option<f32>,
+    /// subwy starts with the windows it had open when it quit.
+    pub reopen_windows: bool,
     /// Extra key bindings, applied after subwy's own (so they win).
     pub keymap: Vec<KeyOverride>,
 }
@@ -88,6 +96,10 @@ impl Default for Settings {
             show_ignored: true,
             follow_active_file: true,
             single_click_open: false,
+            terminal_on_start: true,
+            terminal_shell: String::new(),
+            terminal_font_size: None,
+            reopen_windows: true,
             keymap: Vec::new(),
         }
     }
@@ -137,6 +149,12 @@ fn validate(settings: &Settings) -> Result<(), String> {
     }
     if !(1..=16).contains(&settings.tab_size) {
         return Err("tab_size must be between 1 and 16".into());
+    }
+    if settings
+        .terminal_font_size
+        .is_some_and(|size| !(6. ..=72.).contains(&size))
+    {
+        return Err("terminal_font_size must be between 6 and 72".into());
     }
     Ok(())
 }
