@@ -221,6 +221,51 @@
     return { s, x: area.x + (area.w - bw * s) / 2 - bx * s, y: area.y + (area.h - bh * s) / 2 - by * s };
   }
 
+  // Where each station of the header's line sits on the page: the top, the first stop of the ride,
+  // then each section with its heading just under the header.
+  const HEADER = 64;
+  const DWELL = 0.22;
+  function stationScrolls() {
+    const y = window.scrollY;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const heading = (id) => {
+      const section = $(id);
+      return section.getBoundingClientRect().top + y + parseFloat(getComputedStyle(section).paddingTop) - HEADER - 28;
+    };
+    return [0, $('ride').getBoundingClientRect().top + y, heading('window'), heading('timetable'), heading('tickets')].map((v) => Math.min(Math.max(0, v), max));
+  }
+
+  // The train eases toward where the scroll puts it, so wheel steps read as one smooth ride.
+  let shown = 0;
+  let goal = 0;
+  let gliding = 0;
+  function glideTo(value) {
+    goal = value;
+    if (!gliding) gliding = requestAnimationFrame(glide);
+  }
+  function glide() {
+    shown += (goal - shown) * 0.14;
+    if (Math.abs(goal - shown) < 0.0015) shown = goal;
+    $('navline').style.setProperty('--p', shown.toFixed(4));
+    const stop = Math.round(shown);
+    const reached = Math.floor(shown + 0.01);
+    if (stop !== S.navStop || reached !== S.navReached) set({ navStop: stop, navReached: reached });
+    gliding = shown === goal ? 0 : requestAnimationFrame(glide);
+  }
+
+  // In-page links go to the same spots the stations mark.
+  const STATION_IDS = ['#map', '#ride', '#window', '#timetable', '#tickets'];
+  document.querySelectorAll('a[href^="#"]').forEach((a) => {
+    const i = STATION_IDS.indexOf(a.getAttribute('href'));
+    if (i < 0) return;
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.scrollTo({ top: stationScrolls()[i], behavior: still ? 'auto' : 'smooth' });
+      history.replaceState(null, '', STATION_IDS[i]);
+    });
+  });
+
   // Where the reader is: the ride's stop, the camera, the header's train, what has come into view.
   function measure() {
     const vp = $('viewport');
@@ -238,17 +283,17 @@
     const cam = camera(phase, W, H, { right: card.right - box.left, top: card.top - box.top });
     if (Math.abs(cam.s - S.cam.s) > 0.001 || Math.abs(cam.x - S.cam.x) > 0.5 || Math.abs(cam.y - S.cam.y) > 0.5) next.cam = cam;
 
-    const tops = ['map', 'ride', 'window', 'timetable', 'tickets'].map((id) => $(id).getBoundingClientRect().top);
-    const probe = H * 0.4;
-    let pos = 0;
-    tops.forEach((t, i) => {
-      if (t > probe) return;
-      const after = tops[i + 1];
-      pos = after === undefined ? i : i + Math.min(1, (probe - t) / Math.max(1, after - t));
+    // The header's train waits at each station, then glides to the next one.
+    const ys = stationScrolls();
+    const y = window.scrollY;
+    let raw = 0;
+    ys.forEach((at, i) => {
+      if (y < at) return;
+      raw = i === ys.length - 1 ? i : i + Math.min(1, (y - at) / Math.max(1, ys[i + 1] - at));
     });
-    $('navline').style.setProperty('--p', pos.toFixed(4));
-    if (Math.round(pos) !== S.navStop) next.navStop = Math.round(pos);
-    if (Math.floor(pos + 0.01) !== S.navReached) next.navReached = Math.floor(pos + 0.01);
+    const i0 = Math.floor(raw);
+    const g = Math.min(1, Math.max(0, (raw - i0 - DWELL) / (1 - 2 * DWELL)));
+    glideTo(i0 + g * g * (3 - 2 * g));
     const past = r.top < -H * 0.5;
     if (past !== S.past) next.past = past;
 
