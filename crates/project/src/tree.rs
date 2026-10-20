@@ -95,6 +95,8 @@ pub struct ProjectTree {
     also: Vec<PathBuf>,
     /// Where a Shift range starts.
     anchor: Option<PathBuf>,
+    /// Gitignored items are shown, dimmed; off, they are left out with what they hold.
+    show_ignored: bool,
 }
 
 impl ProjectTree {
@@ -108,12 +110,32 @@ impl ProjectTree {
             selected: None,
             also: Vec::new(),
             anchor: None,
+            show_ignored: true,
         }
     }
 
     /// Leaves the open folder's row out (see `hide_root`).
     pub fn hide_root(&mut self) {
         self.hide_root = true;
+    }
+
+    pub fn shows_ignored(&self) -> bool {
+        self.show_ignored
+    }
+
+    /// Shows or leaves out gitignored items. A selection left out moves up to the nearest folder
+    /// still shown.
+    pub fn set_show_ignored(&mut self, show: bool) {
+        self.show_ignored = show;
+        let rows = self.rows();
+        let shown = |path: &Path| rows.iter().any(|row| row.path == path);
+        if let Some(lead) = self.selected.clone()
+            && !shown(&lead)
+        {
+            let up = lead.ancestors().skip(1).find(|dir| shown(dir));
+            self.select(up.map(Path::to_path_buf));
+        }
+        self.also.retain(|path| shown(path));
     }
 
     pub fn root(&self) -> &Path {
@@ -418,6 +440,9 @@ impl ProjectTree {
             return;
         };
         for entry in entries {
+            if entry.ignored && !self.show_ignored {
+                continue;
+            }
             let path = dir.join(&entry.name);
             // A folder opened before its listing said it loops still stays closed.
             let expanded =
@@ -966,5 +991,25 @@ mod tests {
             outermost(&paths),
             ["docs", "docsy.md", "src/main.rs"].map(PathBuf::from)
         );
+    }
+
+    #[test]
+    fn hiding_ignored_items_leaves_them_out_with_their_contents() {
+        let ignored = |entry: DirEntry| DirEntry {
+            ignored: true,
+            ..entry
+        };
+        let mut tree = tree_with(&[
+            ("", vec![ignored(dir("target")), file("a.md")]),
+            ("target", vec![file("out.bin")]),
+        ]);
+        tree.select(Some("target/out.bin".into()));
+        tree.set_show_ignored(false);
+        let paths: Vec<PathBuf> = tree.rows().into_iter().map(|row| row.path).collect();
+        assert_eq!(paths, ["", "a.md"].map(PathBuf::from));
+        // The selection was inside: it moves up to the open folder.
+        assert_eq!(selected(&tree), Some(""));
+        tree.set_show_ignored(true);
+        assert_eq!(tree.rows().len(), 4);
     }
 }

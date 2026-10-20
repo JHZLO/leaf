@@ -19,6 +19,8 @@ pub struct Settings {
     pub soft_wrap: SoftWrap,
     /// The key hint line under the tree.
     pub key_hints: bool,
+    /// Gitignored items in the tree, dimmed; `false` leaves them out.
+    pub show_ignored: bool,
     /// Extra key bindings, applied after subwy's own (so they win).
     pub keymap: Vec<KeyOverride>,
 }
@@ -51,6 +53,7 @@ impl Default for Settings {
             tab_size: 4,
             soft_wrap: SoftWrap::Markdown,
             key_hints: true,
+            show_ignored: true,
             keymap: Vec::new(),
         }
     }

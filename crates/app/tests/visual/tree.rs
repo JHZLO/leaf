@@ -25,6 +25,7 @@ pub fn run(check: &mut Check) {
     open_in_terminal(check);
     binary(check);
     expand_keys(check);
+    ignored(check);
     tabs_follow(check);
     check.cx.update(|cx| Theme::change(was, None, cx));
 }
@@ -600,6 +601,33 @@ fn expand_keys(check: &mut Check) {
     check.keys(window, "cmd-shift--");
     let collapsed = check.workspace(window, |w, cx| w.tree_expanded(cx));
     check.expect_eq("cmd-shift-- collapses all", collapsed, Some(Vec::new()));
+}
+
+/// The more menu's Show Ignored Files leaves gitignored items out, and brings them back.
+fn ignored(check: &mut Check) {
+    let fixture = fixture();
+    let window = open_light(check, fixture.path());
+    // The more button is the second from the header's right; its list hangs under it, right
+    // edges aligned: Add Folder…, Key Hints, Show Ignored Files.
+    let more = 6. + 300. - 6. - 11. - 24.;
+    let toggle = 38. + 6. + 24. + 1. + 4. + 22. * 2. + 11.;
+    click(check, window, more, 38. + 17.);
+    check.shot(window, "tree-16-more-menu");
+    click(check, window, more - 60., toggle);
+    let rows = check.workspace(window, |w, cx| w.tree_rows(cx));
+    check.expect_eq(
+        "show ignored files off leaves target out",
+        rows.contains(&PathBuf::from("target")),
+        false,
+    );
+    click(check, window, more, 38. + 17.);
+    click(check, window, more - 60., toggle);
+    let rows = check.workspace(window, |w, cx| w.tree_rows(cx));
+    check.expect_eq(
+        "show ignored files on brings it back",
+        rows.contains(&PathBuf::from("target")),
+        true,
+    );
 }
 
 fn click_with(

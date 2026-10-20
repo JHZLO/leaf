@@ -424,6 +424,7 @@ impl ProjectPanel {
         if folders.several() {
             tree.hide_root();
         }
+        tree.set_show_ignored(crate::settings(cx).show_ignored);
         let mut panel = Self {
             tree,
             folders,
@@ -1208,9 +1209,11 @@ impl ProjectPanel {
             )
     }
 
-    /// The more button's list: the key hint line, and the copy and reveal actions for the selection.
+    /// The more button's list: the key hint line, gitignored items, and the copy and reveal actions
+    /// for the selection.
     fn options_popup(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let hints = self.show_key_hints;
+        let ignored = self.tree.shows_ignored();
         floating(
             HEADER_BUTTON + 2.,
             Anchor::TopRight,
@@ -1240,6 +1243,21 @@ impl ProjectPanel {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.menu = None;
                         this.show_key_hints = !this.show_key_hints;
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    popup_item(
+                        "tree-option-ignored",
+                        ignored.then_some(IconName::Check),
+                        "Show Ignored Files",
+                        false,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.menu = None;
+                        this.tree.set_show_ignored(!this.tree.shows_ignored());
+                        this.reveal_selection();
                         cx.notify();
                     })),
                 )

@@ -132,13 +132,15 @@ Changes apply the next time subwy starts.
   "tab_size": 4,
   "soft_wrap": "markdown",
   "key_hints": true,
+  "show_ignored": true,
   "keymap": [
     { "key": "cmd-p", "action": "workspace::ToggleFinder", "context": "Workspace" }
   ]
 }
 ```
 
-`soft_wrap` is `markdown`, `all` or `none`. Entries in `keymap` are added after subwy's own keys, so they win.
+`soft_wrap` is `markdown`, `all` or `none`. `show_ignored` set to `false` leaves gitignored items out of the tree
+(the tree's more menu switches it for the window). Entries in `keymap` are added after subwy's own keys, so they win.
 A file that does not parse is ignored (with the reason in the status bar) and the defaults are used.
 
 ## Development
