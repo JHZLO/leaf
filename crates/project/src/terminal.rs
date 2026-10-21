@@ -10,7 +10,8 @@ use std::{
     cell::Cell,
     collections::HashMap,
     io,
-    path::Path,
+    os::fd::{AsRawFd, RawFd},
+    path::{Path, PathBuf},
     sync::Arc,
     thread::{self, JoinHandle},
 };
@@ -81,6 +82,9 @@ pub struct Shell<L: EventListener + Send + 'static> {
     size: Cell<GridSize>,
     sender: EventLoopSender,
     io: Option<JoinHandle<(EventLoop<Pty, L>, State)>>,
+    /// The process started on the terminal, and the terminal's own end, to ask where the shell is.
+    pid: u32,
+    tty: RawFd,
 }
 
 impl<L: EventListener + Clone + Send + 'static> Shell<L> {
@@ -110,6 +114,7 @@ impl<L: EventListener + Clone + Send + 'static> Shell<L> {
         };
         let term = Arc::new(FairMutex::new(Term::new(config, &size, listener.clone())));
         let pty = tty::new(&options, size.window(), 0)?;
+        let (pid, tty) = (pty.child().id(), pty.file().as_raw_fd());
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         let io = Some(event_loop.spawn());
@@ -118,11 +123,23 @@ impl<L: EventListener + Clone + Send + 'static> Shell<L> {
             size: Cell::new(size),
             sender,
             io,
+            pid,
+            tty,
         })
     }
 }
 
 impl<L: EventListener + Send + 'static> Shell<L> {
+    /// The folder the shell is in now, as `cd` left it: that of the program in front on its
+    /// terminal (the shell itself at its prompt). The process started is not the shell when macOS
+    /// starts the login shell through `login`, which stays where it began.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        // Safe: asks about a descriptor and writes nothing; a closed one only returns -1.
+        let front = unsafe { libc::tcgetpgrp(self.tty) };
+        let pid = if front > 0 { front } else { self.pid as i32 };
+        process_cwd(pid)
+    }
+
     /// The screen as the panel paints it.
     pub fn frame(&self, palette: &Palette) -> Frame {
         frame(&self.term.lock(), palette)
@@ -264,6 +281,42 @@ impl Mods {
     fn any(self) -> bool {
         self.shift || self.alt || self.ctrl
     }
+}
+
+/// The working folder of process `pid`, from the kernel.
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: i32) -> Option<PathBuf> {
+    use std::{ffi::CStr, os::unix::ffi::OsStrExt};
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+    // Safe: the kernel writes at most `size` bytes into `info`.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    // The path is NUL-terminated inside its fixed buffer (MAXPATHLEN, split into rows by libc).
+    let bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(
+            info.pvi_cdir.vip_path.as_ptr().cast(),
+            std::mem::size_of_val(&info.pvi_cdir.vip_path),
+        )
+    };
+    let path = CStr::from_bytes_until_nul(bytes).ok()?;
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(path.to_bytes()));
+    path.is_absolute().then_some(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_cwd(pid: i32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
 /// The bytes for a key the shell reads as a key rather than as text: Enter, arrows, function
@@ -858,6 +911,32 @@ mod tests {
             .to_string();
         let frame = shell.frame(&palette());
         assert_eq!(texts(&frame)[0], [format!("in {name}").as_str()]);
+    }
+
+    #[test]
+    fn a_shell_tells_the_folder_cd_took_it_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let size = GridSize {
+            cols: 40,
+            rows: 5,
+            cell_width: 8,
+            cell_height: 16,
+        };
+        let shell = Shell::spawn(&root, Some(("/bin/sh", &[])), size, Events(tx)).unwrap();
+        let settles = |want: PathBuf| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while shell.cwd() != Some(want.clone()) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+            shell.cwd()
+        };
+        assert_eq!(settles(root.clone()), Some(root.clone()));
+        shell.write(b"cd sub\n".as_slice());
+        assert_eq!(settles(root.join("sub")), Some(root.join("sub")));
+        shell.write(b"exit\n".as_slice());
     }
 
     #[test]

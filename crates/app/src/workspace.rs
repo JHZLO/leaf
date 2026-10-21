@@ -597,10 +597,21 @@ impl Workspace {
         // What the Window menu and the Dock list this window as.
         window.set_window_title(folders.name());
         self.watch(&folders, window, cx);
-        // The terminal is open from the start (the user asked for it on by default, and the settings
-        // can turn it off); focus stays in the tree.
-        if crate::settings(cx).terminal_on_start {
-            self.show_terminal(window, cx);
+        // The terminal comes back as it was left. A folder without one has it open from the start
+        // (the user asked for it on by default, and the settings can turn it off). Focus stays in
+        // the tree.
+        match saved.as_ref().and_then(|s| s.terminal.as_ref()) {
+            Some(state) if self.terminal.is_none() => {
+                let started =
+                    self.start_terminal(&state.folders(folders.first()), state.active, window, cx);
+                if let Some(terminal) = self.terminal.as_mut().filter(|_| started) {
+                    terminal.visible = state.visible;
+                }
+            }
+            _ if crate::settings(cx).terminal_on_start => {
+                self.show_terminal(window, cx);
+            }
+            _ => {}
         }
         if let Some((expanded, selected, width, _)) = before {
             let expanded: Vec<PathBuf> = expanded
@@ -618,6 +629,7 @@ impl Workspace {
                 panel.restore(&saved.expanded, saved.selected.clone(), cx);
                 panel.width = saved.tree_width.unwrap_or(panel.width);
             });
+            self.terminal_height = saved.terminal_height.unwrap_or(self.terminal_height);
             self.tabs.update(cx, |tabs, cx| {
                 tabs.restore(&saved.tabs, saved.active_tab, window, cx);
                 if saved.preview {
@@ -807,6 +819,15 @@ impl Workspace {
         let tabs = self.tabs.read(cx);
         (saved.tabs, saved.active_tab) = tabs.session_tabs(cx);
         saved.preview = tabs.preview_open();
+        saved.terminal = self.terminal.as_ref().map(|terminal| {
+            let (tabs, active) = terminal.view.read(cx).session(cx);
+            session::TerminalState {
+                tabs,
+                active,
+                visible: terminal.visible,
+            }
+        });
+        saved.terminal_height = Some(self.terminal_height);
         saved
     }
 
@@ -1041,32 +1062,50 @@ impl Workspace {
     fn show_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<&Terminal> {
         if self.terminal.is_none() {
             let root = self.root(cx)?;
-            let view = cx.new(|_| TerminalTabs::new(root));
-            if !view.update(cx, |tabs, cx| tabs.add(window, cx)) {
+            if !self.start_terminal(&[root], 0, window, cx) {
                 return None;
             }
-            let subscription = cx.subscribe_in(
-                &view,
-                window,
-                |this, _, event: &TerminalTabsEvent, window, cx| match event {
-                    TerminalTabsEvent::Empty { had_focus } => {
-                        this.terminal = None;
-                        if *had_focus {
-                            this.focus_editor_area(window, cx);
-                        }
-                        cx.notify();
-                    }
-                },
-            );
-            self.terminal = Some(Terminal {
-                view,
-                visible: false,
-                _subscription: subscription,
-            });
         }
         let terminal = self.terminal.as_mut()?;
         terminal.visible = true;
         Some(terminal)
+    }
+
+    /// Starts the terminal, hidden, with a tab in each of `folders` and `active` in front. False
+    /// when no folder is open or no shell could start.
+    fn start_terminal(
+        &mut self,
+        folders: &[PathBuf],
+        active: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(root) = self.root(cx) else {
+            return false;
+        };
+        let view = cx.new(|_| TerminalTabs::new(root));
+        if !view.update(cx, |tabs, cx| tabs.restore(folders, active, window, cx)) {
+            return false;
+        }
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &TerminalTabsEvent, window, cx| match event {
+                TerminalTabsEvent::Empty { had_focus } => {
+                    this.terminal = None;
+                    if *had_focus {
+                        this.focus_editor_area(window, cx);
+                    }
+                    cx.notify();
+                }
+            },
+        );
+        self.terminal = Some(Terminal {
+            view,
+            visible: false,
+            _subscription: subscription,
+        });
+        true
     }
 
     fn tree_focused(&self, window: &Window, cx: &App) -> bool {

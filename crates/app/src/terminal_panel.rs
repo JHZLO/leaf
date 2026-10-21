@@ -142,6 +142,11 @@ impl TerminalPanel {
         }
     }
 
+    /// The folder the shell is in now, for the session.
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.shell.cwd()
+    }
+
     /// The text on screen, one string per line, for the UI checks.
     pub fn visible_lines(&self, cx: &App) -> Vec<String> {
         self.shell

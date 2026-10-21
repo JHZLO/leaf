@@ -8,6 +8,7 @@ use std::{
 };
 
 use gpui_kit::AnyWindowHandle;
+use subwy_project::session::{self, TerminalState};
 
 use crate::check::{Check, fixture};
 
@@ -92,6 +93,92 @@ pub fn run(check: &mut Check) {
     check.keys(window, "e x i t enter");
     let closed = wait_for_workspace(check, window, |w, cx| w.terminal_lines(cx).is_none());
     check.expect_eq("exit in the last tab closes the terminal", closed, true);
+
+    reopen(check);
+}
+
+/// Closed and opened again, a folder's terminal comes back: its tabs, each in the folder `cd`
+/// took its shell to, the one in front, shown or hidden, and its height.
+fn reopen(check: &mut Check) {
+    let fixture = fixture();
+    let root = fixture.path().canonicalize().expect("root");
+    let window = check.open(Some(&root));
+    check.keys(window, "alt-f12");
+    wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$'))
+    });
+    check.keys(window, "c d space d o c s enter cmd-t");
+    wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$'))
+    });
+    check.keys(window, "c d space s r c enter p w d enter");
+    let src = root.join("src");
+    wait_for(check, window, |lines| {
+        lines.iter().any(|l| Path::new(l) == src)
+    });
+    // A move in the tree saves the session a moment later.
+    check.keys(window, "cmd-1 down");
+    check.cx.advance_clock(Duration::from_secs(2));
+    check.cx.run_until_parked();
+    let mut saved = session::load(&session::default_path());
+    let state = saved.window(&root).and_then(|w| w.terminal.clone());
+    check.expect_eq(
+        "the session keeps each terminal tab's folder",
+        state,
+        Some(TerminalState {
+            tabs: vec![root.join("docs"), src.clone()],
+            active: 1,
+            visible: true,
+        }),
+    );
+
+    // As if hidden and made taller before quitting.
+    if let Some(entry) = saved
+        .windows
+        .iter_mut()
+        .find(|w| w.root.as_ref() == Some(&root))
+    {
+        if let Some(terminal) = entry.terminal.as_mut() {
+            terminal.visible = false;
+        }
+        entry.terminal_height = Some(300.);
+    }
+    check
+        .cx
+        .update_window(window, |_, window, _| window.remove_window())
+        .expect("window");
+    session::save(&session::default_path(), &saved).expect("session file");
+    let window = check.open(Some(&root));
+    let tabs = check.workspace(window, |w, cx| w.terminal_tabs(cx));
+    check.expect_eq("both terminal tabs come back", tabs, 2);
+    let hidden = check.workspace(window, |w, cx| w.terminal_lines(cx).is_none());
+    check.expect_eq("a hidden terminal comes back hidden", hidden, true);
+    let height = check.workspace(window, |w, cx| w.island_sizes(cx).1);
+    check.expect_eq("the terminal keeps its height", height, 300.);
+    check.keys(window, "alt-f12");
+    wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$'))
+    });
+    check.keys(window, "p w d enter");
+    let front = wait_for(check, window, |lines| {
+        lines.iter().any(|l| Path::new(l) == src)
+    });
+    check.expect_eq("the tab in front is back in its folder", front, true);
+    check.shot(window, "terminal-3-reopened");
+    check.keys(window, "cmd-shift-[");
+    wait_for(check, window, |lines| {
+        lines.iter().any(|l| l.ends_with('$'))
+    });
+    check.keys(window, "p w d enter");
+    let docs = root.join("docs");
+    let first = wait_for(check, window, |lines| {
+        lines.iter().any(|l| Path::new(l) == docs)
+    });
+    check.expect_eq("the other tab is back in its folder", first, true);
+    check
+        .cx
+        .update_window(window, |_, window, _| window.remove_window())
+        .expect("window");
 }
 
 /// The shell answers on its own thread; give it up to five seconds.

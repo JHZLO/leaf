@@ -95,6 +95,32 @@ impl TerminalTabs {
         true
     }
 
+    /// Starts a tab in each of `folders` (the session's), with `active` in front. False when no
+    /// shell could start.
+    pub fn restore(
+        &mut self,
+        folders: &[PathBuf],
+        active: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        for folder in folders {
+            self.add_in(folder, window, cx);
+        }
+        self.active = active.min(self.tabs.len().saturating_sub(1));
+        !self.tabs.is_empty()
+    }
+
+    /// Each tab's folder now, in order, and the tab in front: what the session keeps.
+    pub fn session(&self, cx: &App) -> (Vec<PathBuf>, usize) {
+        let folders = self
+            .tabs
+            .iter()
+            .map(|tab| tab.view.read(cx).cwd().unwrap_or_else(|| self.cwd.clone()))
+            .collect();
+        (folders, self.active)
+    }
+
     /// Where the keyboard goes for the terminal: the tab in front.
     pub fn focus_handle(&self, cx: &App) -> Option<FocusHandle> {
         let tab = self.tabs.get(self.active)?;

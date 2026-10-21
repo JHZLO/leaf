@@ -43,7 +43,9 @@ cargo run --release -p subwy -- ~/notes          # open a folder
 cargo run --release -p subwy -- ~/notes/todo.md  # open a file in its folder
 ```
 
-Without an argument subwy reopens the windows you left, each with its folders, tree and tabs.
+Without an argument subwy reopens the windows you left, each with its folders, tree and tabs, and
+its terminal tabs, each shell starting again in the folder you had `cd`'d to (what they showed is
+not kept).
 
 A window can hold several folders: add one with `Cmd+O`
 (This Window) or the tree's more menu (Add Folder…), and take it out with Remove from Window on its

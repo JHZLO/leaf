@@ -1,4 +1,5 @@
-//! What subwy reopens with: each window's folder, tree and tabs, the zoom and the recent folders.
+//! What subwy reopens with: each window's folder, tree, tabs and terminal, the zoom and the
+//! recent folders.
 
 use std::{
     io,
@@ -36,6 +37,42 @@ pub struct WindowState {
     pub active_tab: Option<usize>,
     pub tree_width: Option<f32>,
     pub preview: bool,
+    /// The terminal's tabs when it had any. Without, a window opens its terminal as the settings
+    /// say (files from before subwy kept it have none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<TerminalState>,
+    /// At 100% zoom, as dragged.
+    pub terminal_height: Option<f32>,
+}
+
+/// A window's terminal as it was left. The shells start again; what they showed is gone.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalState {
+    /// Each tab's folder, where `cd` had taken its shell, in tab order.
+    pub tabs: Vec<PathBuf>,
+    /// The tab in front.
+    pub active: usize,
+    /// Shown, or hidden (Alt+F12) with its shells running.
+    pub visible: bool,
+}
+
+impl TerminalState {
+    /// The folder each tab starts in again: its own, or `root` when that is gone.
+    pub fn folders(&self, root: &Path) -> Vec<PathBuf> {
+        let folders: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .map(|tab| match tab.is_dir() {
+                true => tab.clone(),
+                false => root.to_path_buf(),
+            })
+            .collect();
+        match folders.is_empty() {
+            true => vec![root.to_path_buf()],
+            false => folders,
+        }
+    }
 }
 
 impl Session {
@@ -112,6 +149,38 @@ pub fn save(path: &Path, session: &Session) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_keeps_its_terminal_and_old_files_read_without_it() {
+        let window = WindowState {
+            root: Some(PathBuf::from("/a")),
+            terminal: Some(TerminalState {
+                tabs: vec![PathBuf::from("/a/docs"), PathBuf::from("/tmp")],
+                active: 1,
+                visible: true,
+            }),
+            terminal_height: Some(300.),
+            ..WindowState::default()
+        };
+        let json = serde_json::to_string(&window).unwrap();
+        assert_eq!(serde_json::from_str::<WindowState>(&json).unwrap(), window);
+        let old: WindowState = serde_json::from_str(r#"{"root": "/a"}"#).unwrap();
+        assert_eq!(old.terminal, None);
+        assert_eq!(old.terminal_height, None);
+    }
+
+    #[test]
+    fn a_tab_whose_folder_is_gone_starts_in_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, kept) = (dir.path().to_path_buf(), dir.path().join("kept"));
+        std::fs::create_dir(&kept).unwrap();
+        let terminal = TerminalState {
+            tabs: vec![kept.clone(), dir.path().join("gone")],
+            ..TerminalState::default()
+        };
+        assert_eq!(terminal.folders(&root), [kept, root.clone()]);
+        assert_eq!(TerminalState::default().folders(&root), [root]);
+    }
 
     #[test]
     fn a_window_keeps_its_added_folders_and_old_files_read_without_them() {
