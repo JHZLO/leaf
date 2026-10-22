@@ -10,7 +10,9 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
     button::Button,
     dialog::{DialogEntrance, DialogFooter},
-    input::{Editor, EditorState, InputEvent, Position, Rope, RopeExt as _, TabSize},
+    input::{
+        Editor, EditorState, InputEvent, MoveDown, MoveUp, Position, Rope, RopeExt as _, TabSize,
+    },
     tooltip::Tooltip,
 };
 use gpui_kit::{assets::IconName, prelude::FluentBuilder as _, *};
@@ -1361,6 +1363,29 @@ impl EditorTabs {
         }
     }
 
+    /// Down on the last line goes to the end of the text and Up on the first to its start, as in
+    /// macOS text views; gpui-kit's editor stays put there. Only the editor knows its rows (soft
+    /// wrap, folds), so its own move runs first and a caret it left in place goes on.
+    fn past_edge(&mut self, to_end: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.active_tab().map(|tab| tab.editor.clone()) else {
+            return;
+        };
+        let state = editor.read(cx);
+        if !state.focus_handle(cx).is_focused(window) || !state.selected_range().is_empty() {
+            return;
+        }
+        let before = state.cursor();
+        cx.defer_in(window, move |_, window, cx| {
+            editor.update(cx, |state, cx| {
+                if state.cursor() == before && state.selected_range().is_empty() {
+                    let offset = if to_end { state.text().len() } else { 0 };
+                    let position = state.text().offset_to_position(offset);
+                    state.set_cursor_position(position, window, cx);
+                }
+            });
+        });
+    }
+
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         self.edit_markdown(window, cx, |text, selection| {
             if !selection.is_empty() {
@@ -1617,7 +1642,15 @@ impl Render for EditorTabs {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::colors(cx);
         // In a column under the banner, so it takes the height left rather than all of it.
-        let body = div().flex_1().min_h_0();
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .capture_action(
+                cx.listener(|this, _: &MoveDown, window, cx| this.past_edge(true, window, cx)),
+            )
+            .capture_action(
+                cx.listener(|this, _: &MoveUp, window, cx| this.past_edge(false, window, cx)),
+            );
         let body = match self.active_tab() {
             None => body.bg(c(p.paper)),
             Some(tab) => {

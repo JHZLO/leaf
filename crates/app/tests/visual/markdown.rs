@@ -155,4 +155,38 @@ pub fn run(check: &mut Check) {
         "code: cmd-b does nothing",
         "- item\n    word",
     );
+
+    edges(check);
+}
+
+/// Down on the last line goes to the end of the text and Up on the first to its start; elsewhere
+/// they keep the column.
+fn edges(check: &mut Check) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    fs::write(dir.path().join("edge.md"), "first\nlast line").expect("write");
+    let window = check.open(Some(dir.path()));
+    check.keys(window, "down down enter down");
+    type_text(check, window, "A");
+    let got = check.workspace(window, |w, cx| w.active_text(cx));
+    check.expect_eq(
+        "down keeps the column",
+        got.as_deref(),
+        Some("first\nAlast line"),
+    );
+    check.keys(window, "down");
+    type_text(check, window, "X");
+    let got = check.workspace(window, |w, cx| w.active_text(cx));
+    check.expect_eq(
+        "down on the last line goes to its end",
+        got.as_deref(),
+        Some("first\nAlast lineX"),
+    );
+    check.keys(window, "up up");
+    type_text(check, window, "Y");
+    let got = check.workspace(window, |w, cx| w.active_text(cx));
+    check.expect_eq(
+        "up on the first line goes to its start",
+        got.as_deref(),
+        Some("Yfirst\nAlast lineX"),
+    );
 }
